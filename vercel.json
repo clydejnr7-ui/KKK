@@ -3,5 +3,9 @@
   "builds": [
     { "src": "api/*.ts", "use": "@vercel/node" }
   ],
-  "buildCommand": ""
+  "routes": [
+    { "src": "/api/health", "dest": "/api/health.ts" },
+    { "src": "/api/webhook", "dest": "/api/webhook.ts" },
+    { "src": "/api/set-webhook", "dest": "/api/set-webhook.ts" }
+  ]
 }
