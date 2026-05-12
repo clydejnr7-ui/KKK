@@ -116,8 +116,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
   bot.callbackQuery("menu_status", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      `*📋 Your Account Status*\n${"─".repeat(28)}\n\nStatus: *⏳ Not Registered Yet*\n\n` +
-      `Complete the registration form to submit your MT4/MT5 account for management.`,
+      `*📋 Your Account Status*\n${"─".repeat(28)}\n\nStatus: *⏳ Not Registered Yet*\n\nComplete the registration form to submit your MT4/MT5 account for management.`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
     );
   });
@@ -142,16 +141,30 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.answerCallbackQuery("⏳ Submitting...");
     const userId = ctx.from!.id;
     const session = await getSession(userId);
+
     await savePending(userId, session, ctx.from.username);
+
     try {
-      await ctx.api.sendMessage(process.env.ADMIN_CHANNEL_ID!, buildAdminMessage(session, userId, ctx.from.username), { parse_mode: "HTML" });
+      await ctx.api.sendMessage(
+        process.env.ADMIN_CHANNEL_ID!,
+        buildAdminMessage(session, userId, ctx.from.username),
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("✅ Approve", `approve_${userId}`)
+            .text("❌ Reject", `reject_${userId}`),
+        }
+      );
     } catch (e) {
       console.error("Admin channel error:", e);
     }
+
     await resetSession(userId);
     await ctx.reply(buildConfirmationMessage(session), {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("📊 View My Balance Now", "menu_balance").row().text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard()
+        .text("📊 View My Balance Now", "menu_balance").row()
+        .text("🏠 Main Menu", "menu_main"),
     });
   });
 
@@ -165,8 +178,10 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const userId = ctx.from!.id;
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
+
     const handledByDeposit = await handleDepositTextInput(ctx);
     if (handledByDeposit) return;
+
     const session = await getSession(userId);
 
     switch (session.step) {
@@ -249,7 +264,10 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         const updatedSession = await getSession(userId);
         await ctx.reply(buildFormPreview(updatedSession), {
           parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("✅ Confirm & Submit", "submit_confirm").row().text("✏️ Edit (start over)", "menu_register").text("❌ Cancel", "submit_cancel"),
+          reply_markup: new InlineKeyboard()
+            .text("✅ Confirm & Submit", "submit_confirm").row()
+            .text("✏️ Edit (start over)", "menu_register")
+            .text("❌ Cancel", "submit_cancel"),
         });
         break;
       }
@@ -264,6 +282,12 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 async function askPlatform(ctx: Context) {
   await ctx.reply(
     stepHeader(1, 9, "🖥️ Trading Platform") + `\n\nSelect your trading platform:`,
-    { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📊 MetaTrader 4  (MT4)", "platform_MT4").row().text("📈 MetaTrader 5  (MT5)", "platform_MT5").row().text("❌ Cancel", "form_cancel") }
+    {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard()
+        .text("📊 MetaTrader 4  (MT4)", "platform_MT4").row()
+        .text("📈 MetaTrader 5  (MT5)", "platform_MT5").row()
+        .text("❌ Cancel", "form_cancel"),
+    }
   );
 }
