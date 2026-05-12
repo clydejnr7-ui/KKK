@@ -38,12 +38,12 @@ function setCache(metaApiAccountId: string, balance: LiveBalance): void {
 }
 
 function getApi(): InstanceType<typeof MetaApi> | null {
-  const token = process.env.META_API_TOKEN;
+  const token = process.env.META_API_TOKEN?.trim(); // trim prevents ERR_INVALID_CHAR from accidental spaces/newlines
   if (!token) return null;
   return new MetaApi(token);
 }
 
-// ── Initial validation (called on admin /approve) ─────────────────────────────
+// ── Initial validation (called on admin approve) ──────────────────────────────
 // Can take up to 90s on first connection. Admin is shown a "verifying..." message.
 export async function connectAndValidate(
   creds: AccountCredentials
@@ -58,6 +58,8 @@ export async function connectAndValidate(
   const loginPassword = creds.investorPassword?.trim() || creds.password;
 
   let account: any;
+  let isNewAccount = false;
+
   try {
     // Reuse existing provisioned account if present
     const all = await api.metatraderAccountApi.getAccountsWithInfiniteScrollPagination();
@@ -75,6 +77,7 @@ export async function connectAndValidate(
         platform: creds.platform.toLowerCase() as "mt4" | "mt5",
         magic: 0,
       });
+      isNewAccount = true;
     }
   } catch (err: any) {
     return { success: false, error: parseError(err) };
@@ -107,8 +110,16 @@ export async function connectAndValidate(
 
     return { success: true, metaApiAccountId: account.id, balance: live };
   } catch (err: any) {
-    // Remove the account if it was freshly created and failed to connect
-    try { await account.undeploy(); } catch { /* ignore */ }
+    // Remove newly created account if it failed to connect — cleans up MetaAPI quota
+    if (isNewAccount && account) {
+      try {
+        await account.undeploy();
+        await account.remove();
+        console.error(`Cleaned up orphaned MetaAPI account: ${account.id}`);
+      } catch (cleanupErr) {
+        console.error(`Failed to clean up MetaAPI account ${account.id}:`, cleanupErr);
+      }
+    }
     return { success: false, error: parseError(err) };
   }
 }
@@ -156,6 +167,10 @@ export async function fetchLiveBalance(
 // ── Parse MetaAPI error messages into human-readable form ─────────────────────
 function parseError(err: any): string {
   const msg: string = err?.message ?? String(err);
+
+  if (msg.includes("ERR_INVALID_CHAR") || msg.includes("Invalid character")) {
+    return "Configuration error — META_API_TOKEN contains invalid characters (likely a trailing space or newline). Re-paste the token in Vercel environment variables.";
+  }
   if (
     msg.includes("INVALID_CREDENTIALS") ||
     msg.includes("NotAuthenticated") ||
@@ -166,10 +181,13 @@ function parseError(err: any): string {
     return "Invalid credentials — login, password, or investor password is incorrect.";
   }
   if (msg.includes("server") || msg.includes("Server")) {
-    return "Invalid server name — check broker server (e.g. ICMarkets-Live).";
+    return "Invalid server name — check broker server exactly as shown in MT4/MT5 login screen (e.g. ICMarkets-Live01).";
   }
-  if (msg.includes("timeout") || msg.includes("Timeout")) {
-    return "Connection timed out — broker server may be unreachable. Verify server name and platform (MT4 vs MT5).";
+  if (msg.toLowerCase().includes("timeout") || msg.toLowerCase().includes("timed out")) {
+    return "Connection timed out — broker server name may be incorrect or unreachable. Verify the exact server name and platform (MT4 vs MT5).";
+  }
+  if (msg.includes("Unauthorized") || msg.includes("401")) {
+    return "META_API_TOKEN is invalid or expired — regenerate it from app.metaapi.cloud.";
   }
   return `Broker error: ${msg.slice(0, 200)}`;
 }
