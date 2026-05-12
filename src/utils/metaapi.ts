@@ -1,6 +1,7 @@
 // MetaAPI integration — connects to real MT4/MT5 broker accounts
 // Sign up for a free token at: https://metaapi.cloud
-// Free tier: 2 provisioned accounts. Upgrade for production scale.
+// Free tier: 2 provisioned accounts. This code verifies then immediately
+// deletes each account so the free slot is freed after every approval.
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const MetaApi = require("metaapi.cloud-sdk").default;
@@ -23,28 +24,15 @@ export interface AccountCredentials {
   platform: "MT4" | "MT5";
 }
 
-// ── Balance cache (60s TTL) to avoid hammering MetaAPI on every /balance tap ──
-const balanceCache = new Map<string, LiveBalance>();
-
-function getCached(metaApiAccountId: string): LiveBalance | null {
-  const cached = balanceCache.get(metaApiAccountId);
-  if (!cached) return null;
-  const age = Date.now() - cached.lastUpdated.getTime();
-  return age < 60_000 ? cached : null;
-}
-
-function setCache(metaApiAccountId: string, balance: LiveBalance): void {
-  balanceCache.set(metaApiAccountId, balance);
-}
-
 function getApi(): InstanceType<typeof MetaApi> | null {
   const token = process.env.META_API_TOKEN?.trim(); // trim prevents ERR_INVALID_CHAR from accidental spaces/newlines
   if (!token) return null;
   return new MetaApi(token);
 }
 
-// ── Initial validation (called on admin approve) ──────────────────────────────
-// Can take up to 90s on first connection. Admin is shown a "verifying..." message.
+// ── One-time credential verification (called on admin approve) ────────────────
+// Connects to broker, grabs starting balance, then immediately removes the
+// MetaAPI account — keeps the free tier slot free forever.
 export async function connectAndValidate(
   creds: AccountCredentials
 ): Promise<ConnectResult> {
@@ -54,14 +42,13 @@ export async function connectAndValidate(
   }
 
   const accountName = `TradingFlux-${creds.userId}`;
-  // Use investor password (read-only) for safety; fall back to main password
   const loginPassword = creds.investorPassword?.trim() || creds.password;
 
   let account: any;
   let isNewAccount = false;
 
   try {
-    // Reuse existing provisioned account if present
+    // Reuse existing provisioned account if present (e.g. from a previous retry)
     const all = await api.metatraderAccountApi.getAccountsWithInfiniteScrollPagination();
     const found = all.find((a: any) => a.name === accountName);
 
@@ -106,61 +93,29 @@ export async function connectAndValidate(
       server: creds.serverName,
     };
 
-    setCache(account.id, live);
+    // ── Delete immediately after verifying — frees the free tier slot ─────
+    try {
+      await account.undeploy();
+      await account.remove();
+    } catch (cleanupErr) {
+      console.error(`Post-verify cleanup failed for ${account.id}:`, cleanupErr);
+    }
 
-    return { success: true, metaApiAccountId: account.id, balance: live };
+    // No persistent metaApiAccountId stored — balance uses projections from here
+    return { success: true, metaApiAccountId: undefined, balance: live };
+
   } catch (err: any) {
-    // Remove newly created account if it failed to connect — cleans up MetaAPI quota
-    if (isNewAccount && account) {
+    // Also clean up on connection failure to free the slot
+    if (account) {
       try {
         await account.undeploy();
         await account.remove();
-        console.error(`Cleaned up orphaned MetaAPI account: ${account.id}`);
+        console.error(`Cleaned up failed MetaAPI account: ${account.id}`);
       } catch (cleanupErr) {
         console.error(`Failed to clean up MetaAPI account ${account.id}:`, cleanupErr);
       }
     }
     return { success: false, error: parseError(err) };
-  }
-}
-
-// ── Fetch live balance for an already-provisioned account ─────────────────────
-export async function fetchLiveBalance(
-  metaApiAccountId: string,
-  serverName?: string
-): Promise<LiveBalance | null> {
-  const cached = getCached(metaApiAccountId);
-  if (cached) return cached;
-
-  const api = getApi();
-  if (!api) return null;
-
-  try {
-    const account = await api.metatraderAccountApi.getAccount(metaApiAccountId);
-
-    if (account.connectionStatus !== "CONNECTED") {
-      await account.waitConnected({ timeoutInSeconds: 20 });
-    }
-
-    const conn = account.getRPCConnection();
-    await conn.connect();
-    await conn.waitSynchronized({ timeoutInSeconds: 15 });
-    const info = await conn.getAccountInformation();
-    await conn.close();
-
-    const live: LiveBalance = {
-      balance: info.balance,
-      equity: info.equity,
-      openProfit: info.equity - info.balance,
-      currency: info.currency,
-      leverage: info.leverage,
-      lastUpdated: new Date(),
-      server: serverName,
-    };
-    setCache(metaApiAccountId, live);
-    return live;
-  } catch {
-    return null;
   }
 }
 
@@ -170,6 +125,9 @@ function parseError(err: any): string {
 
   if (msg.includes("ERR_INVALID_CHAR") || msg.includes("Invalid character")) {
     return "Configuration error — META_API_TOKEN contains invalid characters (likely a trailing space or newline). Re-paste the token in Vercel environment variables.";
+  }
+  if (msg.includes("top up your account") || msg.includes("top up") || msg.includes("billing")) {
+    return "MetaAPI free tier quota exceeded — delete unused accounts at app.metaapi.cloud, then retry.";
   }
   if (
     msg.includes("INVALID_CREDENTIALS") ||
