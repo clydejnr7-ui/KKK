@@ -1,20 +1,20 @@
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, NextFunction } from "grammy";
 import { getPending, removePending } from "../pending";
 import { registerAccount } from "./balance";
 import { connectAndValidate } from "../utils/metaapi";
 import { formatUSD } from "../utils/balance";
 
 export function registerApproveHandler(bot: Bot<Context>): void {
-  bot.on("message:text", async (ctx) => {
+  bot.on("message:text", async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-    if (!adminChannelId) return;
+    if (!adminChannelId) { await next(); return; }
 
-    // Only act in the admin channel
-    if (ctx.chat.id.toString() !== adminChannelId) return;
+    // Only act in the admin channel — pass through all other messages
+    if (ctx.chat.id.toString() !== adminChannelId) { await next(); return; }
 
     const text = ctx.message.text.trim();
     const match = text.match(/^\/approve_(\d+)$/i);
-    if (!match) return;
+    if (!match) { await next(); return; }
 
     const userId = parseInt(match[1], 10);
     const pending = getPending(userId);
@@ -28,7 +28,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       return;
     }
 
-    // ── Step 1: Tell admin we're verifying ────────────────────────────────────
     await ctx.reply(
       `🔄 <b>Verifying credentials with broker...</b>\n\n` +
       `👤 <b>${pending.fullName}</b>\n` +
@@ -39,7 +38,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       { parse_mode: "HTML" }
     );
 
-    // ── Step 2: Connect to MetaAPI and validate ───────────────────────────────
     const result = await connectAndValidate({
       userId,
       accountNumber: pending.accountNumber ?? "",
@@ -49,9 +47,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       platform: (pending.platform as "MT4" | "MT5") ?? "MT5",
     });
 
-    // ── Step 3a: Credentials invalid ─────────────────────────────────────────
     if (!result.success) {
-      // Tell admin
       await ctx.reply(
         `❌ <b>Credential Verification FAILED</b>\n\n` +
         `👤 ${pending.fullName} (ID: <code>${userId}</code>)\n\n` +
@@ -66,7 +62,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         { parse_mode: "HTML" }
       );
 
-      // Notify user their credentials failed
       try {
         await ctx.api.sendMessage(
           userId,
@@ -95,7 +90,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       return;
     }
 
-    // ── Step 3b: Credentials valid — activate account ─────────────────────────
     const deposit = parseFloat(pending.depositAmount ?? "0");
     const startDate = pending.startDate ? new Date(pending.startDate) : new Date();
     const live = result.balance;
@@ -114,7 +108,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
     removePending(userId);
 
-    // ── Notify the user ────────────────────────────────────────────────────────
     const balanceLine = live
       ? `💰 Live Balance: *${live.currency} ${formatUSD(live.balance)}*\n` +
         `📊 Equity:       *${live.currency} ${formatUSD(live.equity)}*\n`
@@ -153,7 +146,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       );
     }
 
-    // ── Confirm in admin channel ───────────────────────────────────────────────
     const liveInfo = live
       ? `\n\n💰 <b>Live Broker Data</b>\n` +
         `   Balance:  <b>${live.currency} ${formatUSD(live.balance)}</b>\n` +
