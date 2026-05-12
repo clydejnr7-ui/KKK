@@ -1,6 +1,5 @@
 import { UserSession } from "../types";
 
-// Escape user-supplied strings so they can't break HTML parse mode
 function esc(s: string | undefined): string {
   return (s ?? "")
     .replace(/&/g, "&amp;")
@@ -45,7 +44,7 @@ export function buildAdminMessage(
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🕐 Submitted: ${submittedAt}\n` +
     `📌 Status: <b>🟡 Pending Review</b>\n\n` +
-    `Reply /approve_${userId} to activate this account.`
+    `Tap ✅ <b>Approve</b> below to activate this account.`
   );
 }
 
