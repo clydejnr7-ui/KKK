@@ -9,7 +9,6 @@ import {
   buildAccountTab,
 } from "../utils/balance";
 import { isPending } from "../pending";
-import { fetchLiveBalance } from "../utils/metaapi";
 
 function r(): Redis {
   return new Redis({
@@ -47,14 +46,6 @@ export async function registerAccount(
     metaApiAccountId,
     serverName,
   });
-}
-
-function dashboardNavRow(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("💰 Deposit", "menu_deposit")
-    .text("💳 Pay Fee ($3)", "menu_fee").row()
-    .text("🔄 Refresh", "dash_refresh")
-    .text("🏠 Main Menu", "menu_main");
 }
 
 function overviewKeyboard(): InlineKeyboard {
@@ -154,7 +145,11 @@ async function sendNotRegistered(ctx: Context, edit = false) {
   await ctx.reply(text, opts);
 }
 
-async function sendDashboard(ctx: Context, tab: "overview" | "projections" | "daily" | "account", edit = false) {
+async function sendDashboard(
+  ctx: Context,
+  tab: "overview" | "projections" | "daily" | "account",
+  edit = false
+) {
   const account = await getAccount(ctx.from!.id);
 
   if (!account) {
@@ -168,11 +163,9 @@ async function sendDashboard(ctx: Context, tab: "overview" | "projections" | "da
 
   const { data, isDemo } = account;
 
-  let live: LiveBalance | undefined;
-  if (data.metaApiAccountId) {
-    const result = await fetchLiveBalance(data.metaApiAccountId, data.serverName);
-    live = result ?? undefined;
-  }
+  // Live balance via MetaAPI is not used — balance is calculated from
+  // deposit + start date using compound projections (+3%/day).
+  const live: LiveBalance | undefined = undefined;
 
   let text: string;
   let keyboard: InlineKeyboard;
