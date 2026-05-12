@@ -13,7 +13,7 @@ export default async function webhook(req: VercelRequest, res: VercelResponse) {
   try {
     await handler(req as any, res as any);
   } catch (err) {
-    console.error("Webhook error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("WEBHOOK CRASH:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
+    res.status(200).json({ ok: true });
   }
 }
