@@ -1,37 +1,23 @@
-import "dotenv/config";
-import { Bot } from "grammy";
-import { registerFormHandlers } from "./handlers/form";
-import { registerBalanceHandler } from "./handlers/balance";
-import { registerDepositHandlers } from "./handlers/deposit";
-import { registerApproveHandler } from "./handlers/approve";
+import { VercelRequest, VercelResponse } from "@vercel/node";
+import { bot } from "../src/index";
 
-const token = process.env.TELEGRAM_BOT_TOKEN;
-if (!token) {
-  throw new Error("TELEGRAM_BOT_TOKEN is not set in environment variables.");
+let initialized = false;
+
+export default async function webhook(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(200).json({ status: "Trading Flux Bot is alive ✅" });
+    return;
+  }
+
+  try {
+    if (!initialized) {
+      await bot.init();
+      initialized = true;
+    }
+    await bot.handleUpdate(req.body);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("WEBHOOK CRASH:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
+    res.status(200).json({ ok: true });
+  }
 }
-
-export const bot = new Bot(token);
-
-// Register all handlers
-// approve first (admin channel commands, very specific match)
-registerApproveHandler(bot);
-// deposit before form so deposit text input takes priority over form steps
-registerDepositHandlers(bot);
-registerBalanceHandler(bot);
-registerFormHandlers(bot);
-
-// Error handler
-bot.catch((err) => {
-  console.error("Bot error:", err);
-});
-
-// Start polling (for local dev / GitHub Actions runner)
-if (require.main === module) {
-  bot.start({
-    onStart: (info) => {
-      console.log(`Trading Flux Bot (@${info.username}) is running...`);
-    },
-  });
-}
-
-export default bot;
