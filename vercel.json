@@ -11,10 +11,5 @@
       "src": "/api/(.*)",
       "dest": "/api/$1"
     }
-  ],
-  "env": {
-    "TELEGRAM_BOT_TOKEN": "@telegram_bot_token",
-    "ADMIN_CHANNEL_ID": "@admin_channel_id",
-    "WEBHOOK_URL": "@webhook_url"
-  }
+  ]
 }
