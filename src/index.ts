@@ -9,7 +9,6 @@ if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
 export const bot = new Bot<Context>(token);
 
-// Register all handlers
 registerFormHandlers(bot);
 registerApproveHandler(bot);
 registerBalanceHandler(bot);
