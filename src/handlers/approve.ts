@@ -53,12 +53,13 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     if (!result.success) {
+      // Restore original buttons on submission message
       await ctx.editMessageReplyMarkup({
         reply_markup: new InlineKeyboard()
-          .text("🔁 Retry Verify", `approve_${userId}`).row()
-          .text("✅ Manual Override", `manual_${userId}`)
+          .text("✅ Approve", `approve_${userId}`)
           .text("❌ Reject", `reject_${userId}`),
       });
+      // Failure message with action buttons directly on it
       await ctx.reply(
         `❌ <b>Credential Verification FAILED</b>\n\n` +
         `👤 ${pending.fullName} (ID: <code>${userId}</code>)\n\n` +
@@ -66,9 +67,14 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         `<b>Submitted credentials:</b>\n` +
         `  Login:    <code>${pending.accountNumber}</code>\n` +
         `  Server:   <code>${pending.serverName}</code>\n` +
-        `  Platform: ${pending.platform}\n\n` +
-        `<i>Use ✅ Manual Override to approve without MetaAPI verification.</i>`,
-        { parse_mode: "HTML" }
+        `  Platform: ${pending.platform}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("🔁 Retry Verify", `approve_${userId}`).row()
+            .text("✅ Manual Override", `manual_${userId}`)
+            .text("❌ Reject", `reject_${userId}`),
+        }
       );
       return;
     }
