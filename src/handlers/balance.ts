@@ -1,4 +1,5 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
+import { Redis } from "@upstash/redis";
 import {
   AccountData,
   LiveBalance,
@@ -10,16 +11,44 @@ import {
 import { isPending } from "../pending";
 import { fetchLiveBalance } from "../utils/metaapi";
 
-// ─── Account store ────────────────────────────────────────────────────────────
-const accounts: Record<number, AccountData> = {};
+function r(): Redis {
+  return new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+}
 
-function getAccount(ctx: Context): { data: AccountData; isDemo: boolean } | null {
-  const userId = ctx.from!.id;
-  if (accounts[userId]) return { data: accounts[userId], isDemo: false };
+async function getAccount(userId: number): Promise<{ data: AccountData; isDemo: boolean } | null> {
+  const data = await r().get<AccountData>(`acct:${userId}`);
+  if (data) return { data, isDemo: false };
   return null;
 }
 
-// ─── Dashboard keyboards ───────────────────────────────────────────────────────
+export async function registerAccount(
+  userId: number,
+  deposit: number,
+  startDate: Date,
+  fullName: string,
+  platform?: string,
+  broker?: string,
+  accountNumber?: string,
+  email?: string,
+  metaApiAccountId?: string,
+  serverName?: string
+): Promise<void> {
+  await r().set(`acct:${userId}`, {
+    deposit,
+    startDate: startDate.toISOString(),
+    fullName,
+    platform,
+    broker,
+    accountNumber,
+    email,
+    metaApiAccountId,
+    serverName,
+  });
+}
+
 function dashboardNavRow(): InlineKeyboard {
   return new InlineKeyboard()
     .text("💰 Deposit", "menu_deposit")
@@ -79,7 +108,6 @@ function accountKeyboard(isDemo: boolean): InlineKeyboard {
   return kb;
 }
 
-// ─── Pending-review prompt ─────────────────────────────────────────────────────
 async function sendPendingReview(ctx: Context, edit = false) {
   const text =
     `╔═══════════════════════════╗\n` +
@@ -95,19 +123,12 @@ async function sendPendingReview(ctx: Context, edit = false) {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🕐 Review time: *up to 24 hours*\n` +
     `📩 You will be messaged here when approved.`;
-
-  const keyboard = new InlineKeyboard()
-    .text("🏠 Main Menu", "menu_main");
-
+  const keyboard = new InlineKeyboard().text("🏠 Main Menu", "menu_main");
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-
-  if (edit) {
-    try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ }
-  }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
   await ctx.reply(text, opts);
 }
 
-// ─── Not-registered prompt ────────────────────────────────────────────────────
 async function sendNotRegistered(ctx: Context, edit = false) {
   const text =
     `╔═══════════════════════════╗\n` +
@@ -125,25 +146,19 @@ async function sendNotRegistered(ctx: Context, edit = false) {
     `  📅 Daily earnings log\n` +
     `  🎯 Milestone projections\n` +
     `  ℹ️ Your account details`;
-
   const keyboard = new InlineKeyboard()
     .text("📝 Register Account", "menu_register").row()
     .text("🏠 Main Menu", "menu_main");
-
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-
-  if (edit) {
-    try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ }
-  }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
   await ctx.reply(text, opts);
 }
 
-// ─── Core render helper ────────────────────────────────────────────────────────
 async function sendDashboard(ctx: Context, tab: "overview" | "projections" | "daily" | "account", edit = false) {
-  const account = getAccount(ctx);
+  const account = await getAccount(ctx.from!.id);
 
   if (!account) {
-    if (isPending(ctx.from!.id)) {
+    if (await isPending(ctx.from!.id)) {
       await sendPendingReview(ctx, edit);
     } else {
       await sendNotRegistered(ctx, edit);
@@ -153,7 +168,6 @@ async function sendDashboard(ctx: Context, tab: "overview" | "projections" | "da
 
   const { data, isDemo } = account;
 
-  // ── Fetch live balance from MetaAPI if account is connected ───────────────
   let live: LiveBalance | undefined;
   if (data.metaApiAccountId) {
     const result = await fetchLiveBalance(data.metaApiAccountId, data.serverName);
@@ -177,86 +191,21 @@ async function sendDashboard(ctx: Context, tab: "overview" | "projections" | "da
       keyboard = accountKeyboard(isDemo);
       break;
     default:
-      // Overview always gets the live balance overlay when available
       text = buildOverviewTab(data, live);
       keyboard = overviewKeyboard();
   }
 
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-
-  if (edit) {
-    try {
-      await ctx.editMessageText(text, opts);
-      return;
-    } catch { /* fall through */ }
-  }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
   await ctx.reply(text, opts);
 }
 
-// ─── Register all balance handlers ────────────────────────────────────────────
 export function registerBalanceHandler(bot: Bot<Context>): void {
-
-  // /balance command
-  bot.command("balance", async (ctx) => {
-    await sendDashboard(ctx, "overview");
-  });
-
-  // Main menu button — opens dashboard directly
-  bot.callbackQuery("menu_balance", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await sendDashboard(ctx, "overview");
-  });
-
-  // Tab navigation
-  bot.callbackQuery("dash_overview", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await sendDashboard(ctx, "overview", true);
-  });
-
-  bot.callbackQuery("dash_projections", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await sendDashboard(ctx, "projections", true);
-  });
-
-  bot.callbackQuery("dash_daily", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await sendDashboard(ctx, "daily", true);
-  });
-
-  bot.callbackQuery("dash_account", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    await sendDashboard(ctx, "account", true);
-  });
-
-  // Refresh — re-renders current overview with fresh numbers
-  bot.callbackQuery("dash_refresh", async (ctx) => {
-    await ctx.answerCallbackQuery("🔄 Refreshed!");
-    await sendDashboard(ctx, "overview", true);
-  });
-}
-
-// ─── Called after admin approves a submission ─────────────────────────────────
-export function registerAccount(
-  userId: number,
-  deposit: number,
-  startDate: Date,
-  fullName: string,
-  platform?: string,
-  broker?: string,
-  accountNumber?: string,
-  email?: string,
-  metaApiAccountId?: string,
-  serverName?: string
-): void {
-  accounts[userId] = {
-    deposit,
-    startDate,
-    fullName,
-    platform,
-    broker,
-    accountNumber,
-    email,
-    metaApiAccountId,
-    serverName,
-  };
+  bot.command("balance", async (ctx) => { await sendDashboard(ctx, "overview"); });
+  bot.callbackQuery("menu_balance", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "overview"); });
+  bot.callbackQuery("dash_overview", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "overview", true); });
+  bot.callbackQuery("dash_projections", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "projections", true); });
+  bot.callbackQuery("dash_daily", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "daily", true); });
+  bot.callbackQuery("dash_account", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "account", true); });
+  bot.callbackQuery("dash_refresh", async (ctx) => { await ctx.answerCallbackQuery("🔄 Refreshed!"); await sendDashboard(ctx, "overview", true); });
 }
