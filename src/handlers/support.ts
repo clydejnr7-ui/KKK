@@ -60,6 +60,7 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
 
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
+  // ── Admin clicks "Reply to User" in admin channel ─────────────────────────
   bot.callbackQuery(/^support_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -67,53 +68,54 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
 
     await r().set(`support_reply:${adminChatId}`, userId, { ex: 600 });
 
-    await ctx.reply(
+    await ctx.api.sendMessage(
+      adminChatId,
       `✍️ <b>Reply to User</b>\n\n` +
-      `Type your reply for user <code>${userId}</code>.\n` +
+      `Type your next message in this chat to reply to user <code>${userId}</code>.\n` +
       `It will be delivered directly to them.\n\n` +
-      `<i>Send /cancel_reply to abort.</i>`,
+      `<i>To cancel, type</i> <code>/cancel_reply</code>`,
       { parse_mode: "HTML" }
     );
   });
 
-  bot.command("cancel_reply", async (ctx) => {
+  // ── Catch ALL text in admin channel — works for groups AND channels ────────
+  // "message:text"      fires when admin chat is a supergroup/group
+  // "channel_post:text" fires when admin chat is a Telegram channel
+  bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-    if (!adminChannelId || ctx.chat.id.toString() !== adminChannelId) return;
+    const chatId = ctx.chat?.id?.toString();
 
-    const adminChatId = ctx.chat.id.toString();
-    const pending = await r().get(`support_reply:${adminChatId}`);
-    if (!pending) {
-      await ctx.reply(`ℹ️ No reply in progress.`);
-      return;
-    }
-
-    await r().del(`support_reply:${adminChatId}`);
-    await ctx.reply(`✅ Reply cancelled. The user's message is still in the channel.`);
-  });
-
-  bot.on("message:text", async (ctx, next: NextFunction) => {
-    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-
-    if (!adminChannelId || ctx.chat.id.toString() !== adminChannelId) {
+    if (!adminChannelId || chatId !== adminChannelId) {
       await next();
       return;
     }
 
-    const text = ctx.message.text.trim();
-    if (text.startsWith("/")) {
+    const update = ctx.update as any;
+    const text: string = (
+      update.message?.text ??
+      update.channel_post?.text ??
+      ""
+    ).trim();
+
+    if (!text || text.startsWith("/")) {
       await next();
       return;
     }
 
-    const adminChatId = ctx.chat.id.toString();
-    const targetUserId = await r().get<number>(`support_reply:${adminChatId}`);
+    // If admin is in the middle of a rejection — let approve.ts handle it
+    const rejectPending = await r().get<number>(`reject_reason:${chatId}`);
+    if (rejectPending) {
+      await next();
+      return;
+    }
 
+    const targetUserId = await r().get<number>(`support_reply:${chatId}`);
     if (!targetUserId) {
       await next();
       return;
     }
 
-    await r().del(`support_reply:${adminChatId}`);
+    await r().del(`support_reply:${chatId}`);
 
     try {
       await ctx.api.sendMessage(
@@ -122,7 +124,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
         `${text}\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `<i>Reply to this by tapping 💬 Support in the main menu.</i>`,
+        `<i>Reply anytime by tapping 💬 Support in the main menu.</i>`,
         {
           parse_mode: "HTML",
           reply_markup: new InlineKeyboard()
@@ -131,12 +133,14 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
         }
       );
 
-      await ctx.reply(
+      await ctx.api.sendMessage(
+        adminChannelId,
         `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.`,
         { parse_mode: "HTML" }
       );
     } catch (e: any) {
-      await ctx.reply(
+      await ctx.api.sendMessage(
+        adminChannelId,
         `❌ <b>Failed to deliver reply</b> to user <code>${targetUserId}</code>.\n\n` +
         `Reason: ${e?.message ?? "Unknown error"}\n\n` +
         `<i>The user may have blocked the bot.</i>`,
