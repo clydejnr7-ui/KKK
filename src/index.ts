@@ -1,40 +1,15 @@
-import {
-  handleDepositStart,
-  handleNetworkSelected,
-  handleDepositTextInput,
-  creditDeposit,
-} from "./handlers/deposit";
+import { Bot, Context } from "grammy";
+import { registerFormHandlers } from "./handlers/form";
+import { registerApproveHandler } from "./handlers/approve";
+import { registerBalanceHandler } from "./handlers/balance";
+import { registerDepositHandlers } from "./handlers/deposit";
 
-// In your bot setup:
-bot.callbackQuery("menu_deposit", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await handleDepositStart(ctx);
-});
+const token = process.env.TELEGRAM_BOT_TOKEN;
+if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
-bot.callbackQuery("deposit_net_TRC20", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await handleNetworkSelected(ctx, "TRC20");
-});
+export const bot = new Bot<Context>(token);
 
-bot.callbackQuery("deposit_net_ERC20", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await handleNetworkSelected(ctx, "ERC20");
-});
-
-bot.callbackQuery("deposit_check", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await creditDeposit(ctx);
-});
-
-bot.callbackQuery("deposit_cancel", async (ctx) => {
-  await ctx.answerCallbackQuery("Cancelled");
-  const redis = new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
-  await redis.del(`deposit_step:${ctx.from!.id}`);
-  await redis.del(`deposit:${ctx.from!.id}`);
-  await ctx.reply("❌ Deposit cancelled.", {
-    reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
-  });
-});
+registerFormHandlers(bot);
+registerApproveHandler(bot);
+registerBalanceHandler(bot);
+registerDepositHandlers(bot);
