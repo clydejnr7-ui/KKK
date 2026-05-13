@@ -1,4 +1,4 @@
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, NextFunction } from "grammy";
 import { Redis } from "@upstash/redis";
 
 function r(): Redis {
@@ -74,5 +74,74 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       `<i>Send /cancel_reply to abort.</i>`,
       { parse_mode: "HTML" }
     );
+  });
+
+  bot.command("cancel_reply", async (ctx) => {
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (!adminChannelId || ctx.chat.id.toString() !== adminChannelId) return;
+
+    const adminChatId = ctx.chat.id.toString();
+    const pending = await r().get(`support_reply:${adminChatId}`);
+    if (!pending) {
+      await ctx.reply(`ℹ️ No reply in progress.`);
+      return;
+    }
+
+    await r().del(`support_reply:${adminChatId}`);
+    await ctx.reply(`✅ Reply cancelled. The user's message is still in the channel.`);
+  });
+
+  bot.on("message:text", async (ctx, next: NextFunction) => {
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+
+    if (!adminChannelId || ctx.chat.id.toString() !== adminChannelId) {
+      await next();
+      return;
+    }
+
+    const text = ctx.message.text.trim();
+    if (text.startsWith("/")) {
+      await next();
+      return;
+    }
+
+    const adminChatId = ctx.chat.id.toString();
+    const targetUserId = await r().get<number>(`support_reply:${adminChatId}`);
+
+    if (!targetUserId) {
+      await next();
+      return;
+    }
+
+    await r().del(`support_reply:${adminChatId}`);
+
+    try {
+      await ctx.api.sendMessage(
+        targetUserId,
+        `💬 <b>Reply from Trading Flux Support</b>\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `${text}\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `<i>Reply to this by tapping 💬 Support in the main menu.</i>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("💬 Reply", "menu_support").row()
+            .text("🏠 Main Menu", "menu_main"),
+        }
+      );
+
+      await ctx.reply(
+        `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.`,
+        { parse_mode: "HTML" }
+      );
+    } catch (e: any) {
+      await ctx.reply(
+        `❌ <b>Failed to deliver reply</b> to user <code>${targetUserId}</code>.\n\n` +
+        `Reason: ${e?.message ?? "Unknown error"}\n\n` +
+        `<i>The user may have blocked the bot.</i>`,
+        { parse_mode: "HTML" }
+      );
+    }
   });
 }
