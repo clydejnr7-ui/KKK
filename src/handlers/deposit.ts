@@ -6,14 +6,14 @@ import { computeBalance } from "../utils/balance";
 const WALLET = {
   TRC20: {
     address: "TMqZgyf2wjfrXBudHk3p7uYYGP7D9PZvLt",
-    label: "💜 USDT TRC20",
+    label: "USDT TRC20",
     network: "TRON (TRC20)",
     qrUrl: "https://i.8upload.com/image/0ecb47f67b15073b/download-2.png",
     fee: "~1 USDT",
   },
   ERC20: {
     address: "0xc2839F2Dd23B42C227DD91664fD0479659fC4610",
-    label: "🔵 USDT ERC20",
+    label: "USDT ERC20",
     network: "Ethereum (ERC20)",
     qrUrl: "https://i.8upload.com/image/21fc625d9d174723/download-3.png",
     fee: "~5–15 USD gas",
@@ -76,8 +76,8 @@ function uniqueAmount(base: number): number {
 // ── Keyboards ─────────────────────────────────────────────────────────────────
 function networkKeyboard(type: "deposit" | "fee") {
   return new InlineKeyboard()
-    .text("💜 USDT TRC20", `dep_net_TRC20_${type}`).row()
-    .text("🔵 USDT ERC20", `dep_net_ERC20_${type}`).row()
+    .text("USDT TRC20", `dep_net_TRC20_${type}`).row()
+    .text("USDT ERC20", `dep_net_ERC20_${type}`).row()
     .text("🔙 Back", "menu_main");
 }
 
