@@ -3,6 +3,7 @@ import { getSession, updateSession, setStep, resetSession } from "../sessions";
 import { buildAdminMessage, buildConfirmationMessage, buildFormPreview } from "../utils/format";
 import { savePending } from "../pending";
 import { handleDepositTextInput } from "./deposit";
+import { handleSupportTextInput, setSupportStep, clearSupportStep } from "./support";
 import { Redis } from "@upstash/redis";
 import { AccountData, computeBalance, formatUSD } from "../utils/balance";
 import { isPending } from "../pending";
@@ -98,6 +99,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
   bot.command("cancel", async (ctx) => {
     await resetSession(ctx.from!.id);
+    await clearSupportStep(ctx.from!.id);
     await ctx.reply(`✅ *Form cancelled.*\n\nReturning you to the main menu.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
   });
 
@@ -110,6 +112,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
   bot.callbackQuery("menu_main", async (ctx) => {
     await ctx.answerCallbackQuery();
     await resetSession(ctx.from!.id);
+    await clearSupportStep(ctx.from!.id);
     await sendMainMenu(ctx, ctx.from?.first_name);
   });
 
@@ -134,16 +137,26 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     );
   });
 
+  // ── Support form ───────────────────────────────────────────────────────────
   bot.callbackQuery("menu_support", async (ctx) => {
     await ctx.answerCallbackQuery();
+    await setSupportStep(ctx.from!.id);
     await ctx.reply(
-      `*💬 Trading Flux Support*\n${"─".repeat(28)}\n\nOur support team is available 24/7.\n\n` +
-      `📋 *Common Questions:*\n\n▸ *How safe are my credentials?*\n  We use investor-only access for monitoring.\n\n` +
-      `▸ *When does trading start?*\n  Within 24 hours of approval.\n\n` +
-      `▸ *Can I withdraw anytime?*\n  Yes. Your account remains in your name.\n\n` +
-      `▸ *What if I want to stop?*\n  Contact support and we'll remove access immediately.`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Start Registration", "menu_register").row().text("🏠 Main Menu", "menu_main") }
+      `*💬 Contact Support*\n${"─".repeat(28)}\n\n` +
+      `Our support team is available 24/7 and will reply to you directly here in this chat.\n\n` +
+      `📝 *Describe your issue or question:*\n\n` +
+      `_Type your message below and tap Send._`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
+      }
     );
+  });
+
+  bot.callbackQuery("support_cancel", async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    await clearSupportStep(ctx.from!.id);
+    await ctx.reply(`✅ *Cancelled.*`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
   });
 
   bot.callbackQuery("menu_status", async (ctx) => {
@@ -256,6 +269,9 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const userId = ctx.from!.id;
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
+
+    const handledBySupport = await handleSupportTextInput(ctx);
+    if (handledBySupport) return;
 
     const handledByDeposit = await handleDepositTextInput(ctx);
     if (handledByDeposit) return;
