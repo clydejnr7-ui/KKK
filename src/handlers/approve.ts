@@ -53,13 +53,11 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     if (!result.success) {
-      // Restore original buttons on submission message
       await ctx.editMessageReplyMarkup({
         reply_markup: new InlineKeyboard()
           .text("✅ Approve", `approve_${userId}`)
           .text("❌ Reject", `reject_${userId}`),
       });
-      // Failure message with action buttons directly on it
       await ctx.reply(
         `❌ <b>Credential Verification FAILED</b>\n\n` +
         `👤 ${pending.fullName} (ID: <code>${userId}</code>)\n\n` +
@@ -95,17 +93,13 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       reply_markup: new InlineKeyboard().text("✅ Approved", "noop"),
     });
 
-    const balanceLine = result.balance
-      ? `💰 Live Balance: *${result.balance.currency} ${formatUSD(result.balance.balance)}*\n📊 Equity: *${result.balance.currency} ${formatUSD(result.balance.equity)}*\n`
-      : `💰 Deposit: *$${pending.depositAmount}*\n`;
-
     try {
       await ctx.api.sendMessage(userId,
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour MT4/MT5 account has been verified and *activated*.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📈 *Live Data*\n${balanceLine}\nTap below to open your live balance dashboard. 📊`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📊 View Live Balance", "menu_balance").row().text("💰 Deposit More", "menu_deposit") }
+        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. You will receive regular updates. 📊`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
       );
     } catch (e) { console.error(`Failed to notify user ${userId}:`, e); }
 
@@ -116,7 +110,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `💵 Deposit: <b>$${pending.depositAmount}</b>\n` +
       `📅 Start: ${pending.startDate}\n` +
       `🖥 ${pending.platform} — ${pending.brokerName}\n\n` +
-      `User has been notified. Dashboard is now live.`,
+      `User has been notified.`,
       { parse_mode: "HTML" }
     );
   });
@@ -154,8 +148,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour account has been manually reviewed and *activated* by our team.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
-        `💰 Deposit: *$${pending.depositAmount}*\n\nTap below to view your dashboard. 📊`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📊 View Live Balance", "menu_balance").row().text("🏠 Main Menu", "menu_main") }
+        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. You will receive regular updates. 📊`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
       );
     } catch (e) { console.error(`Failed to notify user ${userId}:`, e); }
 
@@ -164,7 +158,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `👤 <b>${pending.fullName}</b>\n` +
       `🆔 <code>${userId}</code>\n` +
       `💵 $${pending.depositAmount} — ${pending.platform} ${pending.brokerName}\n\n` +
-      `⚠️ <i>Balance uses calculated projections. MetaAPI verification was skipped.</i>`,
+      `User has been notified.`,
       { parse_mode: "HTML" }
     );
   });
