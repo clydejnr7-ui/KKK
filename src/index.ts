@@ -3,6 +3,7 @@ import { registerFormHandlers } from "./handlers/form";
 import { registerApproveHandler } from "./handlers/approve";
 import { registerBalanceHandler } from "./handlers/balance";
 import { registerDepositHandlers } from "./handlers/deposit";
+import { registerSupportHandlers } from "./handlers/support";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -13,3 +14,4 @@ registerFormHandlers(bot);
 registerApproveHandler(bot);
 registerBalanceHandler(bot);
 registerDepositHandlers(bot);
+registerSupportHandlers(bot);
