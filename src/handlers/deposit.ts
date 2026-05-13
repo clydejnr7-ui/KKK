@@ -100,8 +100,8 @@ async function sendDepositMenu(ctx: Context, type: "deposit" | "fee", edit = fal
       : `Pay your weekly bot management fee.\n\n📌 Amount due: *$${WEEKLY_FEE} USDT*\n`) +
     `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🌐 Select your preferred network:\n\n` +
-    `  💜 *TRC20* — Fast & low fees (~$1)\n` +
-    `  🔵 *ERC20* — Higher gas fees (~$5–15)\n\n` +
+    `  💜 *TRC20*\n` +
+    `  🔵 *ERC20*\n\n` +
     `_💡 TRC20 is recommended for most users._`;
 
   const opts = { parse_mode: "Markdown" as const, reply_markup: networkKeyboard(type) };
@@ -279,7 +279,7 @@ export async function handleDepositTextInput(ctx: Context): Promise<boolean> {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `⚠️ Send the *exact amount* shown above.\n` +
     `The unique cents help us identify your payment.\n\n` +
-    `⏱ Payment expires in *60`,
+    `⏱ Payment expires in *60 minutes.*`,
     {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
