@@ -1,4 +1,4 @@
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, NextFunction } from "grammy";
 import { getSession, updateSession, setStep, resetSession } from "../sessions";
 import { buildAdminMessage, buildConfirmationMessage, buildFormPreview } from "../utils/format";
 import { savePending } from "../pending";
@@ -137,7 +137,6 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     );
   });
 
-  // ── Support form ───────────────────────────────────────────────────────────
   bot.callbackQuery("menu_support", async (ctx) => {
     await ctx.answerCallbackQuery();
     await setSupportStep(ctx.from!.id);
@@ -265,7 +264,17 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.reply(`❌ *Submission cancelled.*\n\nYour data was not saved.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
   });
 
-  bot.on("message:text", async (ctx) => {
+  // ── THE FIX: added `next` parameter + admin channel bypass ────────────────
+  bot.on("message:text", async (ctx, next: NextFunction) => {
+    // Admin channel messages must pass through to approve.ts / support.ts
+    if (
+      process.env.ADMIN_CHANNEL_ID &&
+      ctx.chat.id.toString() === process.env.ADMIN_CHANNEL_ID
+    ) {
+      await next();
+      return;
+    }
+
     const userId = ctx.from!.id;
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
