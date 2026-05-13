@@ -23,17 +23,14 @@ export function buildAdminMessage(
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
     `👤 <b>CLIENT</b>\n` +
     `   Name:      <b>${esc(session.fullName)}</b>\n` +
-    `   Email:     <code>${esc(session.email)}</code>\n` +
     `   Telegram:  ${userTag}\n` +
     `   User ID:   <code>${userId}</code>\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🖥 <b>TRADING ACCOUNT</b>\n` +
     `   Platform:  <b>${esc(session.platform)}</b>\n` +
-    `   Broker:    <b>${esc(session.brokerName)}</b>\n` +
     `   Server:    <code>${esc(session.serverName)}</code>\n` +
-    `   Account:   <code>${esc(session.accountNumber)}</code>\n` +
-    `   Password:  <code>${esc(session.password)}</code>\n` +
-    `   Investor:  <code>${esc(session.investorPassword)}</code>\n\n` +
+    `   Login:     <code>${esc(session.accountNumber)}</code>\n` +
+    `   Password:  <code>${esc(session.password)}</code>\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💵 <b>INVESTMENT</b>\n` +
     `   Deposit:   <b>$${esc(session.depositAmount)}</b>\n` +
@@ -62,8 +59,8 @@ export function buildConfirmationMessage(session: UserSession): string {
     `${"━".repeat(28)}\n` +
     `📋 *SUMMARY*\n` +
     `   Platform:  *${session.platform}*\n` +
-    `   Broker:    *${session.brokerName}*\n` +
-    `   Account:   \`${session.accountNumber}\`\n` +
+    `   Login:     \`${session.accountNumber}\`\n` +
+    `   Server:    \`${session.serverName}\`\n` +
     `   Deposit:   *$${session.depositAmount}*\n` +
     `   Start:     ${session.startDate}\n\n` +
     `${"━".repeat(28)}\n` +
@@ -84,20 +81,17 @@ export function buildFormPreview(session: UserSession): string {
     `└─────────────────────────┘\n\n` +
     `Please confirm all details are correct before submitting:\n\n` +
     `${"━".repeat(28)}\n` +
-    `👤 *Personal*\n` +
-    `   Name:     *${session.fullName}*\n` +
-    `   Email:    \`${session.email}\`\n\n` +
+    `👤 *Name*\n` +
+    `   ${session.fullName}\n\n` +
     `🖥️ *Trading Account*\n` +
     `   Platform: *${session.platform}*\n` +
-    `   Broker:   *${session.brokerName}*\n` +
     `   Server:   \`${session.serverName}\`\n` +
-    `   Account:  \`${session.accountNumber}\`\n` +
-    `   Password: \`${session.password}\`\n` +
-    `   Investor: \`${session.investorPassword}\`\n\n` +
+    `   Login:    \`${session.accountNumber}\`\n` +
+    `   Password: \`${session.password}\`\n\n` +
     `💵 *Investment*\n` +
     `   Deposit:  *$${session.depositAmount}*\n` +
     `   Date:     ${session.startDate}\n` +
     `${"━".repeat(28)}\n\n` +
-    `_Double-check your credentials. Incorrect details will delay activation._`
+    `_Double-check your login and password. Incorrect details will delay activation._`
   );
 }
