@@ -20,11 +20,10 @@ function stepHeader(step: number, total: number, title: string): string {
 function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("📝 Register Account", "menu_register").row()
-    .text("📊 Live Balance", "menu_balance")
-    .text("💰 Deposit", "menu_deposit").row()
-    .text("💳 Pay Fee ($3)", "menu_fee")
-    .text("❓ How It Works", "menu_howitworks").row()
-    .text("💬 Support", "menu_support")
+    .text("💰 Deposit", "menu_deposit")
+    .text("💳 Pay Fee ($3)", "menu_fee").row()
+    .text("❓ How It Works", "menu_howitworks")
+    .text("💬 Support", "menu_support").row()
     .text("📋 My Status", "menu_status");
 }
 
@@ -56,8 +55,8 @@ export function registerFormHandlers(bot: Bot<Context>): void {
   bot.command("help", async (ctx) => {
     await ctx.reply(
       `*📖 Trading Flux — Help Centre*\n${"─".repeat(28)}\n\n` +
-      `*Commands:*\n▸ /start — Main menu\n▸ /register — Submit account\n▸ /balance — Live dashboard\n▸ /cancel — Exit current form\n▸ /help — This menu\n\n` +
-      `*How Account Management Works:*\n① Submit your MT4/MT5 credentials\n② Our team reviews within 24 hours\n③ We activate your account\n④ Your balance grows +3%/day\n⑤ Track it live with /balance\n\n` +
+      `*Commands:*\n▸ /start — Main menu\n▸ /register — Submit account\n▸ /cancel — Exit current form\n▸ /help — This menu\n\n` +
+      `*How Account Management Works:*\n① Submit your MT4/MT5 credentials\n② Our team reviews within 24 hours\n③ We activate your account\n④ Your balance grows +3%/day\n\n` +
       `${"─".repeat(28)}\n💡 Tip: Use the buttons for the best experience.`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
     );
@@ -95,7 +94,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       `*Step 2 — Expert Review (24h)*\nOur team verifies your account details and sets up management.\n\n` +
       `*Step 3 — Activation*\nWe activate trading on your account with our proven strategy.\n\n` +
       `*Step 4 — Daily Growth*\nYour balance grows at +3% per day using compound interest.\n\n` +
-      `*Step 5 — Live Tracking*\nUse /balance anytime to see your real-time balance.\n\n` +
+      `*Step 5 — Daily Updates*\nYou'll receive regular updates on your account performance.\n\n` +
       `${"─".repeat(28)}\n💰 *Example: $1,000 deposit*\n  Day 7:   \\$1,229.87\n  Day 30:  \\$2,427.26\n  Day 90:  \\$14,300.74`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
     );
@@ -162,9 +161,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await resetSession(userId);
     await ctx.reply(buildConfirmationMessage(session), {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard()
-        .text("📊 View My Balance Now", "menu_balance").row()
-        .text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
     });
   });
 
