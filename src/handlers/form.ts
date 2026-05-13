@@ -3,6 +3,22 @@ import { getSession, updateSession, setStep, resetSession } from "../sessions";
 import { buildAdminMessage, buildConfirmationMessage, buildFormPreview } from "../utils/format";
 import { savePending } from "../pending";
 import { handleDepositTextInput } from "./deposit";
+import { Redis } from "@upstash/redis";
+import { AccountData, computeBalance, formatUSD } from "../utils/balance";
+import { isPending } from "../pending";
+
+function r(): Redis {
+  return new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+}
+
+async function getAccountData(userId: number): Promise<AccountData | null> {
+  const raw = await r().get<AccountData>(`acct:${userId}`);
+  if (!raw) return null;
+  return { ...raw, startDate: new Date(raw.startDate as unknown as string) };
+}
 
 const LOGO = `
 ┌─────────────────────────┐
@@ -19,6 +35,7 @@ function stepHeader(step: number, total: number, title: string): string {
 
 function mainMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
+    .text("📊 My Balance", "menu_balance").row()
     .text("📝 Register Account", "menu_register").row()
     .text("💰 Deposit", "menu_deposit")
     .text("💳 Pay Fee ($3)", "menu_fee").row()
@@ -33,9 +50,26 @@ function cancelKeyboard(): InlineKeyboard {
 
 async function sendMainMenu(ctx: Context, firstName?: string) {
   const greeting = firstName ? `Welcome back, *${firstName}*! 👋` : `Welcome to *Trading Flux*! 👋`;
+
+  let balanceLine = "";
+  if (ctx.from?.id) {
+    const account = await getAccountData(ctx.from.id);
+    if (account) {
+      const daysElapsed = Math.max(0, Math.floor((Date.now() - account.startDate.getTime()) / 86_400_000));
+      const currentBalance = computeBalance(account.deposit, daysElapsed);
+      balanceLine =
+        `\n┌─────────────────────────┐\n` +
+        `│  💰 Your Balance          │\n` +
+        `│  *${formatUSD(currentBalance).padEnd(24)}*│\n` +
+        `│  📥 Deposit: ${formatUSD(account.deposit).padEnd(13)}│\n` +
+        `└─────────────────────────┘\n`;
+    }
+  }
+
   await ctx.reply(
-    `${LOGO}\n\n${greeting}\n\n` +
-    `🚀 *Your Professional MT4/MT5 Account Manager*\n\n` +
+    `${LOGO}\n\n${greeting}\n` +
+    balanceLine +
+    `\n🚀 *Your Professional MT4/MT5 Account Manager*\n\n` +
     `✅  +3% daily compound growth\n` +
     `✅  Managed by expert traders\n` +
     `✅  Real-time balance tracking\n` +
@@ -114,8 +148,55 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
   bot.callbackQuery("menu_status", async (ctx) => {
     await ctx.answerCallbackQuery();
+    const userId = ctx.from!.id;
+    const account = await getAccountData(userId);
+
+    if (account) {
+      const msPerDay = 86_400_000;
+      const daysElapsed = Math.max(0, Math.floor((Date.now() - account.startDate.getTime()) / msPerDay));
+      const currentBalance = computeBalance(account.deposit, daysElapsed);
+      const totalProfit = currentBalance - account.deposit;
+      const growthPct = account.deposit > 0 ? ((currentBalance - account.deposit) / account.deposit) * 100 : 0;
+
+      await ctx.reply(
+        `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
+        `👤 *${account.fullName}*\n` +
+        `📌 Status: *🟢 Active*\n\n` +
+        `${"━".repeat(28)}\n` +
+        `💵 *BALANCE SUMMARY*\n\n` +
+        `  💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
+        `  📥 Your Deposit:     *${formatUSD(account.deposit)}*\n` +
+        `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
+        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n\n` +
+        `${"━".repeat(28)}\n` +
+        `🖥️ *${account.platform ?? "—"}*  ·  ${account.broker ?? "—"}\n` +
+        `📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("📊 Full Dashboard", "menu_balance").row()
+            .text("💰 Deposit More", "menu_deposit")
+            .text("🏠 Main Menu", "menu_main"),
+        }
+      );
+      return;
+    }
+
+    if (await isPending(userId)) {
+      await ctx.reply(
+        `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
+        `📌 Status: *⏳ Under Review*\n\n` +
+        `Your submission is being reviewed by our team.\n` +
+        `You'll be notified within 24 hours once approved.`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main") }
+      );
+      return;
+    }
+
     await ctx.reply(
-      `*📋 Your Account Status*\n${"─".repeat(28)}\n\nStatus: *⏳ Not Registered Yet*\n\nComplete the registration form to submit your MT4/MT5 account for management.`,
+      `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
+      `📌 Status: *⚪ Not Registered Yet*\n\n` +
+      `Complete the registration form to submit your MT4/MT5 account for management.`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
     );
   });
