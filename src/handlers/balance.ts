@@ -18,9 +18,14 @@ function r(): Redis {
 }
 
 async function getAccount(userId: number): Promise<{ data: AccountData; isDemo: boolean } | null> {
-  const data = await r().get<AccountData>(`acct:${userId}`);
-  if (data) return { data, isDemo: false };
-  return null;
+  const raw = await r().get<AccountData>(`acct:${userId}`);
+  if (!raw) return null;
+  // Redis stores startDate as ISO string — convert back to Date object
+  const data: AccountData = {
+    ...raw,
+    startDate: new Date(raw.startDate as unknown as string),
+  };
+  return { data, isDemo: false };
 }
 
 export async function registerAccount(
