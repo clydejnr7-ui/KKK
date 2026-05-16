@@ -26,6 +26,9 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
 
   await clearSupportStep(userId);
 
+  // Also clear any lingering user_replying state to avoid routing conflicts
+  await r().del(`user_replying:${userId}`);
+
   const name = ctx.from?.first_name ?? "User";
   const username = ctx.from?.username ? `@${ctx.from.username}` : "no username";
 
@@ -45,13 +48,18 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
+  // Re-enable support step so the user can send a follow-up without
+  // needing to tap "💬 Support" from the main menu again.
+  await setSupportStep(userId);
+
   await ctx.reply(
     `✅ *Message sent to support!*\n\n` +
     `Our team will reply to you here shortly.\n\n` +
-    `_You can send another message anytime by tapping 💬 Support from the main menu._`,
+    `_You can type another message below, or tap the button to return to the menu._`,
     {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard()
+        .text("🏠 Main Menu", "menu_main"),
     }
   );
 
