@@ -3,7 +3,7 @@ import { getSession, updateSession, setStep, resetSession } from "../sessions";
 import { buildAdminMessage, buildConfirmationMessage, buildFormPreview } from "../utils/format";
 import { savePending } from "../pending";
 import { handleDepositTextInput } from "./deposit";
-import { handleSupportTextInput, setSupportStep, clearSupportStep } from "./support";
+import { handleSupportTextInput, handleUserReplyToSupport, setSupportStep, clearSupportStep } from "./support";
 import { Redis } from "@upstash/redis";
 import { AccountData, computeBalance, formatUSD } from "../utils/balance";
 import { isPending } from "../pending";
@@ -277,6 +277,11 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
 
+    // Check if user is replying directly to a support message from admin
+    const handledByUserReply = await handleUserReplyToSupport(ctx);
+    if (handledByUserReply) return;
+
+    // Check if user is composing a new support request
     const handledBySupport = await handleSupportTextInput(ctx);
     if (handledBySupport) return;
 
