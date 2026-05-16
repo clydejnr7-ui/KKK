@@ -97,17 +97,20 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
+  // Re-set so user can keep replying without clicking "💬 Reply" each time
+  await r().set(`user_replying:${userId}`, true, { ex: 600 });
+
   await ctx.reply(
-    `✅ *Message sent!*\n\nOur team will reply shortly.`,
+    `✅ *Message sent!*\n\nOur team will reply shortly.\n\n_You can keep typing below to send more messages._`,
     {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard()
+        .text("🏠 Main Menu", "menu_main"),
     }
   );
 
   return true;
 }
-
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
   // ── Admin clicks "Reply to User" OR "Reply Again" ─────────────────────────
