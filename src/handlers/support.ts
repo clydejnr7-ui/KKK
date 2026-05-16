@@ -60,7 +60,7 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
 
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
-  // ── Admin clicks "Reply to User" in admin channel ─────────────────────────
+  // ── Admin clicks "Reply to User" (or "Reply Again") in admin channel ────────
   bot.callbackQuery(/^support_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -78,9 +78,23 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     );
   });
 
-  // ── Catch ALL text in admin channel — works for groups AND channels ────────
-  // "message:text"      fires when admin chat is a supergroup/group
-  // "channel_post:text" fires when admin chat is a Telegram channel
+  // ── Cancel reply ──────────────────────────────────────────────────────────
+  bot.command("cancel_reply", async (ctx) => {
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (ctx.chat.id.toString() !== adminChannelId) return;
+
+    const adminChatId = ctx.chat.id.toString();
+    const pending = await r().get(`support_reply:${adminChatId}`);
+    if (!pending) {
+      await ctx.reply(`ℹ️ No reply in progress.`);
+      return;
+    }
+
+    await r().del(`support_reply:${adminChatId}`);
+    await ctx.reply(`✅ Reply cancelled.`);
+  });
+
+  // ── Catch ALL text in admin channel ───────────────────────────────────────
   bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     const chatId = ctx.chat?.id?.toString();
@@ -115,6 +129,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       return;
     }
 
+    // Clear the reply session — admin must click "Reply Again" to continue
     await r().del(`support_reply:${chatId}`);
 
     try {
@@ -133,11 +148,17 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
         }
       );
 
+      // ── "Reply Again" button so admin can keep the conversation going ──────
       await ctx.api.sendMessage(
         adminChannelId,
         `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.`,
-        { parse_mode: "HTML" }
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text(`✉️ Reply Again`, `support_reply_${targetUserId}`),
+        }
       );
+
     } catch (e: any) {
       await ctx.api.sendMessage(
         adminChannelId,
