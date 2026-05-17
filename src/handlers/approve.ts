@@ -1,7 +1,7 @@
 import { Bot, Context, InlineKeyboard, NextFunction } from "grammy";
 import { Redis } from "@upstash/redis";
 import { getPending, removePending } from "../pending";
-import { registerAccount } from "./balance";
+import { registerAccount, revokeAccount, getAllActiveUserIds } from "./balance";
 import { connectAndValidate } from "../utils/metaapi";
 import { formatUSD } from "../utils/balance";
 
@@ -10,6 +10,11 @@ function r(): Redis {
     url: process.env.UPSTASH_REDIS_REST_URL!,
     token: process.env.UPSTASH_REDIS_REST_TOKEN!,
   });
+}
+
+function isAdminChannel(ctx: Context): boolean {
+  const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+  return !!adminChannelId && ctx.chat?.id.toString() === adminChannelId;
 }
 
 export function registerApproveHandler(bot: Bot<Context>): void {
@@ -89,8 +94,11 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
     await removePending(userId);
 
+    // ── Keep a Revoke button visible so admin can reject even after approval
     await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard().text("✅ Approved", "noop"),
+      reply_markup: new InlineKeyboard()
+        .text("✅ Approved", "noop")
+        .text("🔑 Revoke Account", `revoke_${userId}`),
     });
 
     try {
@@ -115,7 +123,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── ✅ Manual Override (skip MetaAPI, approve directly) ──────────────────
+  // ── ✅ Manual Override ────────────────────────────────────────────────────
   bot.callbackQuery(/^manual_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("✅ Manual override applied");
     const userId = parseInt(ctx.match[1], 10);
@@ -139,8 +147,11 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
     await removePending(userId);
 
+    // ── Keep a Revoke button visible so admin can reject even after approval
     await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard().text("✅ Manually Approved", "noop"),
+      reply_markup: new InlineKeyboard()
+        .text("✅ Manually Approved", "noop")
+        .text("🔑 Revoke Account", `revoke_${userId}`),
     });
 
     try {
@@ -163,7 +174,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── ❌ Reject button — ask admin for reason ───────────────────────────────
+  // ── ❌ Reject pending submission ──────────────────────────────────────────
   bot.callbackQuery(/^reject_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -193,23 +204,181 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── Cancel rejection ──────────────────────────────────────────────────────
-  bot.command("cancel_reject", async (ctx) => {
-    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-    if (ctx.chat.id.toString() !== adminChannelId) return;
+  // ── 🔑 Revoke approved account ────────────────────────────────────────────
+  bot.callbackQuery(/^revoke_(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("🔑 Revoking account...");
+    const userId = parseInt(ctx.match[1], 10);
 
-    const adminChatId = ctx.chat.id.toString();
-    const pending = await r().get(`reject_reason:${adminChatId}`);
-    if (!pending) {
-      await ctx.reply(`ℹ️ No rejection in progress.`);
+    const adminChatId = ctx.chat!.id.toString();
+    await r().set(`revoke_reason:${adminChatId}`, userId, { ex: 300 });
+
+    await ctx.editMessageReplyMarkup({
+      reply_markup: new InlineKeyboard()
+        .text("✅ Approved", "noop")
+        .text("⏳ Awaiting reason...", "noop"),
+    });
+
+    const raw = await r().get<any>(`acct:${userId}`);
+
+    await ctx.reply(
+      `✍️ <b>Revocation Reason</b>\n\n` +
+      `You are revoking the account of:\n` +
+      `👤 <b>${raw?.fullName ?? "Unknown"}</b> (ID: <code>${userId}</code>)\n` +
+      `🖥 ${raw?.platform ?? "—"} — ${raw?.broker ?? "—"}\n\n` +
+      `Please type the <b>reason</b> to send to the user.\n\n` +
+      `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
+      { parse_mode: "HTML" }
+    );
+  });
+
+  // ── 🔍 /verifyaccounts ────────────────────────────────────────────────────
+  bot.command("verifyaccounts", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const userIds = await getAllActiveUserIds();
+
+    if (userIds.length === 0) {
+      await ctx.reply(`ℹ️ <b>No active accounts found.</b>`, { parse_mode: "HTML" });
       return;
     }
 
+    await ctx.reply(
+      `🔍 <b>Verifying ${userIds.length} active account${userIds.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
+      { parse_mode: "HTML" }
+    );
+
+    let passed = 0, failed = 0, skipped = 0;
+
+    for (const userId of userIds) {
+      const raw = await r().get<any>(`acct:${userId}`);
+      if (!raw) {
+        await r().srem("active_accounts", userId);
+        skipped++;
+        continue;
+      }
+
+      if (!raw.accountNumber || !raw.serverName || !raw.platform) {
+        skipped++;
+        await ctx.reply(
+          `⚠️ <b>Skipped</b> user <code>${userId}</code> — missing credentials.\nUse /revokeaccount ${userId} to manually revoke if needed.`,
+          { parse_mode: "HTML" }
+        );
+        continue;
+      }
+
+      if (!raw.investorPassword && !raw.password) {
+        skipped++;
+        continue;
+      }
+
+      const result = await connectAndValidate({
+        userId,
+        accountNumber: raw.accountNumber,
+        password: raw.password ?? raw.investorPassword ?? "",
+        investorPassword: raw.investorPassword,
+        serverName: raw.serverName,
+        platform: raw.platform as "MT4" | "MT5",
+      });
+
+      if (result.success) {
+        passed++;
+      } else {
+        failed++;
+        const isPasswordError =
+          result.error?.toLowerCase().includes("invalid credentials") ||
+          result.error?.toLowerCase().includes("invalid login") ||
+          result.error?.toLowerCase().includes("wrong password") ||
+          result.error?.toLowerCase().includes("notauthenticated");
+
+        await ctx.reply(
+          `🔑 <b>${isPasswordError ? "Password Changed" : "Verification Failed"}</b>\n\n` +
+          `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+          `🆔 <code>${userId}</code>\n` +
+          `🖥 ${raw.platform} — ${raw.brokerName ?? raw.broker ?? "—"}\n` +
+          `🏦 Server: <code>${raw.serverName}</code>\n` +
+          `🔑 Login: <code>${raw.accountNumber}</code>\n\n` +
+          `<b>Error:</b> ${result.error}\n\n` +
+          `${isPasswordError ? "⚠️ User appears to have changed their MT4/MT5 password." : "⚠️ Connection failed — credentials may have changed or broker is unreachable."}`,
+          {
+            parse_mode: "HTML",
+            reply_markup: new InlineKeyboard()
+              .text("🔑 Revoke — Password Changed", `revoke_${userId}`).row()
+              .text("🔁 Skip for Now", "noop"),
+          }
+        );
+      }
+    }
+
+    await ctx.reply(
+      `✅ <b>Verification Complete</b>\n\n` +
+      `  ✅ Passed:  ${passed}\n` +
+      `  ❌ Failed:  ${failed}\n` +
+      `  ⏭ Skipped: ${skipped}\n\n` +
+      `${failed > 0 ? "⚠️ Revoke flagged accounts above." : "All accounts verified successfully."}`,
+      { parse_mode: "HTML" }
+    );
+  });
+
+  // ── 🔑 /revokeaccount <userId> ────────────────────────────────────────────
+  bot.command("revokeaccount", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const parts = ctx.message?.text?.trim().split(/\s+/);
+    const targetId = parts && parts[1] ? parseInt(parts[1], 10) : NaN;
+
+    if (isNaN(targetId)) {
+      await ctx.reply(
+        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 123456789</code>`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const adminChatId = ctx.chat.id.toString();
+    const raw = await r().get<any>(`acct:${targetId}`);
+    if (!raw) {
+      await ctx.reply(
+        `⚠️ <b>No active account</b> found for user <code>${targetId}</code>.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    await r().set(`revoke_reason:${adminChatId}`, targetId, { ex: 300 });
+
+    await ctx.reply(
+      `✍️ <b>Manual Revocation</b>\n\n` +
+      `You are revoking:\n` +
+      `👤 <b>${raw.fullName ?? "Unknown"}</b> (ID: <code>${targetId}</code>)\n` +
+      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? "—"}\n\n` +
+      `Please type the <b>reason</b> to send to the user.\n\n` +
+      `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
+      { parse_mode: "HTML" }
+    );
+  });
+
+  // ── /cancel_revoke ────────────────────────────────────────────────────────
+  bot.command("cancel_revoke", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+    const adminChatId = ctx.chat.id.toString();
+    const pending = await r().get(`revoke_reason:${adminChatId}`);
+    if (!pending) { await ctx.reply(`ℹ️ No revocation in progress.`); return; }
+    await r().del(`revoke_reason:${adminChatId}`);
+    await ctx.reply(`✅ Revocation cancelled. The account remains active.`);
+  });
+
+  // ── /cancel_reject ────────────────────────────────────────────────────────
+  bot.command("cancel_reject", async (ctx) => {
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (ctx.chat.id.toString() !== adminChannelId) return;
+    const adminChatId = ctx.chat.id.toString();
+    const pending = await r().get(`reject_reason:${adminChatId}`);
+    if (!pending) { await ctx.reply(`ℹ️ No rejection in progress.`); return; }
     await r().del(`reject_reason:${adminChatId}`);
     await ctx.reply(`✅ Rejection cancelled. The submission is still pending.`);
   });
 
-  // ── Capture rejection reason from admin's next text message ───────────────
+  // ── Capture admin text (revocation reason OR rejection reason) ────────────
   bot.on("message:text", async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     if (!adminChannelId || ctx.chat.id.toString() !== adminChannelId) {
@@ -221,11 +390,53 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (text.startsWith("/")) { await next(); return; }
 
     const adminChatId = ctx.chat.id.toString();
+
+    // ── Revocation reason takes priority ──────────────────────────────────
+    const revokeTargetId = await r().get<number>(`revoke_reason:${adminChatId}`);
+    if (revokeTargetId) {
+      await r().del(`revoke_reason:${adminChatId}`);
+      const data = await revokeAccount(revokeTargetId);
+
+      if (!data) {
+        await ctx.reply(`⚠️ Account for user <code>${revokeTargetId}</code> no longer exists.`, { parse_mode: "HTML" });
+        return;
+      }
+
+      try {
+        await ctx.api.sendMessage(revokeTargetId,
+          `╔═══════════════════════════╗\n║  🔑  ACCOUNT REVOKED       ║\n╚═══════════════════════════╝\n\n` +
+          `Hi *${data.fullName}*,\n\n` +
+          `Your account management has been *suspended* by our team.\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `📋 *Reason:*\n\n_${text}_\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `If you believe this is a mistake, please re-register or contact support.`,
+          {
+            parse_mode: "Markdown",
+            reply_markup: new InlineKeyboard()
+              .text("📝 Re-submit Account", "menu_register").row()
+              .text("💬 Contact Support", "menu_support"),
+          }
+        );
+      } catch (e) { console.error(`Failed to notify revoked user ${revokeTargetId}:`, e); }
+
+      await ctx.reply(
+        `🔑 <b>Account Revoked</b>\n\n` +
+        `👤 <b>${data.fullName}</b>\n` +
+        `🆔 <code>${revokeTargetId}</code>\n` +
+        `🖥 ${data.platform ?? "—"} — ${data.broker ?? "—"}\n` +
+        `💵 Deposit was: <b>${formatUSD(data.deposit)}</b>\n\n` +
+        `📋 <b>Reason sent:</b>\n<i>${text}</i>\n\nUser has been notified.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    // ── Rejection reason ──────────────────────────────────────────────────
     const pendingUserId = await r().get<number>(`reject_reason:${adminChatId}`);
     if (!pendingUserId) { await next(); return; }
 
     await r().del(`reject_reason:${adminChatId}`);
-
     const pending = await getPending(pendingUserId);
     if (!pending) {
       await ctx.reply(`⚠️ Submission for user <code>${pendingUserId}</code> no longer exists.`, { parse_mode: "HTML" });
@@ -249,13 +460,12 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `❌ <b>Submission Rejected</b>\n\n` +
       `👤 <b>${pending.fullName}</b>\n` +
       `🆔 <code>${pendingUserId}</code>\n\n` +
-      `📋 <b>Reason sent:</b>\n<i>${text}</i>\n\n` +
-      `User has been notified.`,
+      `📋 <b>Reason sent:</b>\n<i>${text}</i>\n\nUser has been notified.`,
       { parse_mode: "HTML" }
     );
   });
 
-  // ── Noop for disabled buttons ─────────────────────────────────────────────
+  // ── Noop ──────────────────────────────────────────────────────────────────
   bot.callbackQuery("noop", async (ctx) => {
     await ctx.answerCallbackQuery();
   });
