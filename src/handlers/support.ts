@@ -24,7 +24,8 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  await clearSupportStep(userId);
+  // Keep support_step alive so user can send multiple messages without re-opening support
+  await r().set(`support_step:${userId}`, true, { ex: 600 });
 
   // Also clear any lingering user_replying state to avoid routing conflicts
   await r().del(`user_replying:${userId}`);
@@ -48,14 +49,10 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
-  // Re-enable support step so the user can send a follow-up without
-  // needing to tap "💬 Support" from the main menu again.
-  await setSupportStep(userId);
-
   await ctx.reply(
     `✅ *Message sent to support!*\n\n` +
     `Our team will reply to you here shortly.\n\n` +
-    `_You can type another message below, or tap the button to return to the menu._`,
+    `_You can keep typing more messages below, or tap the button to return to the menu._`,
     {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
@@ -76,8 +73,6 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  await r().del(`user_replying:${userId}`);
-
   const name = ctx.from?.first_name ?? "User";
   const username = ctx.from?.username ? `@${ctx.from.username}` : "no username";
 
@@ -97,7 +92,7 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
-  // Re-set so user can keep replying without clicking "💬 Reply" each time
+  // Keep user_replying alive so user can keep sending without tapping "💬 Reply" each time
   await r().set(`user_replying:${userId}`, true, { ex: 600 });
 
   await ctx.reply(
@@ -111,6 +106,7 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
 
   return true;
 }
+
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
   // ── Admin clicks "Reply to User" OR "Reply Again" ─────────────────────────
@@ -125,8 +121,8 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     await ctx.api.sendMessage(
       adminChatId,
       `✍️ <b>Reply to User ${userId}</b>\n\n` +
-      `Type your next message in this chat — it will be sent directly to them.\n\n` +
-      `<i>Type</i> <code>/cancel_reply</code> <i>to abort.</i>`,
+      `Type your messages in this chat — each one will be delivered directly to them.\n\n` +
+      `<i>Type</i> <code>/cancel_reply</code> <i>to stop replying to this user.</i>`,
       { parse_mode: "HTML" }
     );
   });
@@ -146,8 +142,8 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       await ctx.api.sendMessage(
         adminChannelId,
         had
-          ? `✅ <b>Reply cancelled.</b>`
-          : `ℹ️ No reply was in progress.`,
+          ? `✅ <b>Reply session ended.</b> You are no longer replying to user <code>${had}</code>.`
+          : `ℹ️ No reply session was in progress.`,
         { parse_mode: "HTML" }
       );
       return; // consumed — don't call next()
@@ -191,8 +187,8 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       return;
     }
 
-    // Delete AFTER we have the target — prevents double-delivery on retry
-    await r().del(`support_reply:${chatId}`);
+    // Keep the reply session alive so admin can send multiple messages without re-clicking
+    await r().set(`support_reply:${chatId}`, targetUserId, { ex: 600 });
 
     let delivered = false;
     try {
@@ -225,12 +221,9 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     if (delivered) {
       await ctx.api.sendMessage(
         adminChannelId,
-        `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.`,
-        {
-          parse_mode: "HTML",
-          reply_markup: new InlineKeyboard()
-            .text(`✉️ Reply Again`, `support_reply_${targetUserId}`),
-        }
+        `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.\n\n` +
+        `<i>Session is still active — keep typing to send more messages, or type</i> <code>/cancel_reply</code> <i>to end it.</i>`,
+        { parse_mode: "HTML" }
       );
     }
   });
@@ -241,7 +234,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     const userId = ctx.from!.id;
     await r().set(`user_replying:${userId}`, true, { ex: 600 });
     await ctx.reply(
-      `✍️ *Type your reply below* and send it — it will go straight to the support team.`,
+      `✍️ *Type your reply below* and send it — it will go straight to the support team.\n\n_You can send as many messages as you need._`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
