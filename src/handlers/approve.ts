@@ -350,17 +350,17 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 📋 /listaccounts — scans ALL acct:* keys, works for past accounts too ─
+  // ── 📋 /listaccounts ──────────────────────────────────────────────────────
   bot.command("listaccounts", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
-    // Use keys() to find every acct:* entry — catches old accounts never in the set
     const keys = await r().keys("acct:*");
 
     if (!keys || keys.length === 0) {
       await ctx.reply(
         `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
-        `ℹ️ No approved accounts found.`,
+        `ℹ️ No approved accounts found.\n\n` +
+        `<i>Run /debugredis to inspect all Redis keys.</i>`,
         { parse_mode: "HTML" }
       );
       return;
@@ -377,7 +377,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       const raw = await r().get<any>(key);
       if (!raw) continue;
 
-      // Extract userId from "acct:{userId}" and backfill the active_accounts set
       const userId = Number(key.replace("acct:", ""));
       await r().sadd("active_accounts", userId);
 
@@ -410,7 +409,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const keys = await r().keys("acct:*");
 
     if (!keys || keys.length === 0) {
-      await ctx.reply(`ℹ️ <b>No active accounts found.</b>`, { parse_mode: "HTML" });
+      await ctx.reply(`ℹ️ <b>No active accounts found.</b>\n\n<i>Run /debugredis to inspect all Redis keys.</i>`, { parse_mode: "HTML" });
       return;
     }
 
@@ -541,6 +540,35 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!pending) { await ctx.reply(`ℹ️ No rejection in progress.`); return; }
     await r().del(`reject_reason:${adminChatId}`);
     await ctx.reply(`✅ Rejection cancelled. The submission is still pending.`);
+  });
+
+  // ── 🔧 /debugredis — list every key in Redis so we can find the right pattern
+  bot.command("debugredis", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const allKeys = await r().keys("*");
+
+    if (!allKeys || allKeys.length === 0) {
+      await ctx.reply(`🔧 <b>Redis Debug</b>\n\nNo keys found in Redis at all.`, { parse_mode: "HTML" });
+      return;
+    }
+
+    const chunks: string[] = [];
+    let current = `🔧 <b>Redis Keys (${allKeys.length} total):</b>\n\n`;
+
+    for (const key of allKeys) {
+      const line = `• <code>${key}</code>\n`;
+      if ((current + line).length > 3800) {
+        chunks.push(current);
+        current = "";
+      }
+      current += line;
+    }
+    if (current) chunks.push(current);
+
+    for (const chunk of chunks) {
+      await ctx.reply(chunk, { parse_mode: "HTML" });
+    }
   });
 
   // ── Noop ──────────────────────────────────────────────────────────────────
