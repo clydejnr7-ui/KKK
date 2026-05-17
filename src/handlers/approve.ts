@@ -25,7 +25,6 @@ async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> 
 
   const adminChatId = ctx.chat!.id.toString();
 
-  // ── Revocation reason takes priority ──────────────────────────────────────
   const revokeTargetRaw = await r().get(`revoke_reason:${adminChatId}`);
   if (revokeTargetRaw !== null) {
     const revokeTargetId = Number(revokeTargetRaw);
@@ -75,7 +74,6 @@ async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> 
     return;
   }
 
-  // ── Rejection reason ──────────────────────────────────────────────────────
   const pendingUserRaw = await r().get(`reject_reason:${adminChatId}`);
   if (pendingUserRaw === null) { await next(); return; }
 
@@ -125,11 +123,10 @@ async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> 
 
 export function registerApproveHandler(bot: Bot<Context>): void {
 
-  // ── Catch admin text for BOTH supergroups (message) and channels (channel_post)
   bot.on("message:text", handleAdminText);
   bot.on("channel_post:text", handleAdminText);
 
-  // ── ✅ Approve (with MetaAPI verification) ───────────────────────────────
+  // ── ✅ Approve ────────────────────────────────────────────────────────────
   bot.callbackQuery(/^approve_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("⏳ Verifying...");
     const userId = parseInt(ctx.match[1], 10);
@@ -138,7 +135,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!pending) {
       await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
       await ctx.reply(
-        `⚠️ <b>No pending submission</b> found for user <code>${userId}</code>.\n\nThey may already be approved or the submission expired.`,
+        `⚠️ <b>No pending submission</b> found for user <code>${userId}</code>.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -211,18 +208,12 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     try {
-      await ctx.api.sendMessage(
-        userId,
+      await ctx.api.sendMessage(userId,
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour MT4/MT5 account has been verified and *activated*.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
-        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. You will receive regular updates. 📊`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard()
-            .text("💰 Deposit More", "menu_deposit").row()
-            .text("🏠 Main Menu", "menu_main"),
-        }
+        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. 📊`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
       );
     } catch (e) { console.error(`[approve] Failed to notify user ${userId}:`, e); }
 
@@ -232,8 +223,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `🆔 User ID: <code>${userId}</code>\n` +
       `💵 Deposit: <b>$${pending.depositAmount}</b>\n` +
       `📅 Start: ${pending.startDate}\n` +
-      `🖥 ${pending.platform} — ${pending.brokerName}\n\n` +
-      `User has been notified.`,
+      `🖥 ${pending.platform} — ${pending.brokerName}\n\nUser has been notified.`,
       { parse_mode: "HTML" }
     );
   });
@@ -268,32 +258,24 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     try {
-      await ctx.api.sendMessage(
-        userId,
+      await ctx.api.sendMessage(userId,
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour account has been manually reviewed and *activated* by our team.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
-        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. You will receive regular updates. 📊`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard()
-            .text("💰 Deposit More", "menu_deposit").row()
-            .text("🏠 Main Menu", "menu_main"),
-        }
+        `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. 📊`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
       );
     } catch (e) { console.error(`[manual] Failed to notify user ${userId}:`, e); }
 
     await ctx.reply(
       `✅ <b>Manually Approved</b> (MetaAPI verification bypassed)\n\n` +
-      `👤 <b>${pending.fullName}</b>\n` +
-      `🆔 <code>${userId}</code>\n` +
-      `💵 $${pending.depositAmount} — ${pending.platform} ${pending.brokerName}\n\n` +
-      `User has been notified.`,
+      `👤 <b>${pending.fullName}</b>\n🆔 <code>${userId}</code>\n` +
+      `💵 $${pending.depositAmount} — ${pending.platform} ${pending.brokerName}\n\nUser has been notified.`,
       { parse_mode: "HTML" }
     );
   });
 
-  // ── ❌ Reject pending submission ──────────────────────────────────────────
+  // ── ❌ Reject ─────────────────────────────────────────────────────────────
   bot.callbackQuery(/^reject_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -323,27 +305,30 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 🔑 Revoke approved account ────────────────────────────────────────────
+  // ── 🔑 Revoke (button clicked) ────────────────────────────────────────────
   bot.callbackQuery(/^revoke_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
-
     const adminChatId = ctx.chat!.id.toString();
+
     await r().set(`revoke_reason:${adminChatId}`, userId, { ex: 300 });
 
-    await ctx.editMessageReplyMarkup({
-      reply_markup: new InlineKeyboard()
-        .text("✅ Approved", "noop")
-        .text("⏳ Awaiting reason...", "noop"),
-    });
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: new InlineKeyboard()
+          .text("✅ Approved", "noop")
+          .text("⏳ Awaiting reason...", "noop"),
+      });
+    } catch (_) {}
 
     const raw = await r().get<any>(`acct:${userId}`);
 
-    await ctx.reply(
+    await ctx.api.sendMessage(
+      adminChatId,
       `✍️ <b>Revocation Reason</b>\n\n` +
       `You are revoking the account of:\n` +
       `👤 <b>${raw?.fullName ?? "Unknown"}</b> (ID: <code>${userId}</code>)\n` +
-      `🖥 ${raw?.platform ?? "—"} — ${raw?.broker ?? "—"}\n\n` +
+      `🖥 ${raw?.platform ?? "—"} — ${raw?.broker ?? raw?.brokerName ?? "—"}\n\n` +
       `Please type the <b>reason</b> to send to the user.\n\n` +
       `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
       { parse_mode: "HTML" }
@@ -354,52 +339,107 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   bot.command("listaccounts", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
+    const chatId = ctx.chat!.id;
     const keys = await r().keys("acct:*");
 
     if (!keys || keys.length === 0) {
-      await ctx.reply(
+      await ctx.api.sendMessage(
+        chatId,
         `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
-        `ℹ️ No approved accounts found.\n\n` +
-        `<i>Run /debugredis to inspect all Redis keys.</i>`,
+        `ℹ️ No approved accounts found.\n\n<i>Run /debugredis to inspect all Redis keys.</i>`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
-    await ctx.reply(
+    await ctx.api.sendMessage(
+      chatId,
       `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
-      `<b>${keys.length} approved account${keys.length !== 1 ? "s" : ""}</b> — each card has a live Revoke button.\n\n` +
-      `To revoke, tap the button on any card. You will be asked to type a reason first.`,
+      `<b>${keys.length} approved account${keys.length !== 1 ? "s" : ""}</b>\n\n` +
+      `Each card below has a 🔑 Revoke button. Tap it, then type a reason to send to the user.`,
       { parse_mode: "HTML" }
     );
 
     for (const key of keys) {
-      const raw = await r().get<any>(key);
-      if (!raw) continue;
+      try {
+        const raw = await r().get<any>(key);
+        if (!raw) continue;
 
-      const userId = Number(key.replace("acct:", ""));
-      await r().sadd("active_accounts", userId);
+        const userId = Number(key.replace("acct:", ""));
+        await r().sadd("active_accounts", userId);
 
-      const startDate = raw.startDate ? new Date(raw.startDate) : null;
-      const daysActive = startDate
-        ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
-        : "—";
+        const startDate = raw.startDate ? new Date(raw.startDate) : null;
+        const daysActive = startDate
+          ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
+          : "—";
 
-      await ctx.reply(
-        `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
-        `🆔 <code>${userId}</code>\n` +
-        `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
-        `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
-        `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
-        `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
-        `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
-        {
-          parse_mode: "HTML",
-          reply_markup: new InlineKeyboard()
-            .text("🔑 Revoke Account", `revoke_${userId}`),
-        }
-      );
+        const keyboard = new InlineKeyboard()
+          .text("🔑 Revoke Account", `revoke_${userId}`);
+
+        await ctx.api.sendMessage(
+          chatId,
+          `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+          `🆔 <code>${userId}</code>\n` +
+          `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
+          `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
+          `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
+          `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+          `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
+          { parse_mode: "HTML", reply_markup: keyboard }
+        );
+      } catch (e) {
+        console.error(`[listaccounts] Failed to send card for key ${key}:`, e);
+      }
     }
+  });
+
+  // ── 🔧 /fixbutton <userId> — post a fresh revoke card for any old account ──
+  bot.command("fixbutton", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const parts = ctx.message?.text?.trim().split(/\s+/) ?? [];
+    const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
+
+    if (isNaN(targetId)) {
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
+        `⚠️ <b>Usage:</b> <code>/fixbutton &lt;userId&gt;</code>\n\nExample: <code>/fixbutton 7764271121</code>`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const raw = await r().get<any>(`acct:${targetId}`);
+    if (!raw) {
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
+        `⚠️ No active account found for user <code>${targetId}</code>.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const startDate = raw.startDate ? new Date(raw.startDate) : null;
+    const daysActive = startDate
+      ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
+      : "—";
+
+    await ctx.api.sendMessage(
+      ctx.chat!.id,
+      `✅ <b>Approved Account</b>\n\n` +
+      `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+      `🆔 <code>${targetId}</code>\n` +
+      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
+      `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
+      `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
+      `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+      `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
+      {
+        parse_mode: "HTML",
+        reply_markup: new InlineKeyboard()
+          .text("🔑 Revoke Account", `revoke_${targetId}`),
+      }
+    );
   });
 
   // ── 🔍 /verifyaccounts ────────────────────────────────────────────────────
@@ -407,14 +447,13 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!isAdminChannel(ctx)) return;
 
     const keys = await r().keys("acct:*");
-
     if (!keys || keys.length === 0) {
-      await ctx.reply(`ℹ️ <b>No active accounts found.</b>\n\n<i>Run /debugredis to inspect all Redis keys.</i>`, { parse_mode: "HTML" });
+      await ctx.reply(`ℹ️ <b>No active accounts found.</b>`, { parse_mode: "HTML" });
       return;
     }
 
     await ctx.reply(
-      `🔍 <b>Verifying ${keys.length} active account${keys.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
+      `🔍 <b>Verifying ${keys.length} account${keys.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
       { parse_mode: "HTML" }
     );
 
@@ -423,20 +462,12 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     for (const key of keys) {
       const raw = await r().get<any>(key);
       if (!raw) { skipped++; continue; }
-
       const userId = Number(key.replace("acct:", ""));
       await r().sadd("active_accounts", userId);
 
-      if (!raw.accountNumber || !raw.serverName || !raw.platform) {
-        skipped++;
-        await ctx.reply(
-          `⚠️ <b>Skipped</b> user <code>${userId}</code> — missing credentials.\nUse /listaccounts to revoke manually.`,
-          { parse_mode: "HTML" }
-        );
-        continue;
+      if (!raw.accountNumber || !raw.serverName || !raw.platform || (!raw.investorPassword && !raw.password)) {
+        skipped++; continue;
       }
-
-      if (!raw.investorPassword && !raw.password) { skipped++; continue; }
 
       const result = await connectAndValidate({
         userId,
@@ -461,8 +492,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           `🔑 <b>${isPasswordError ? "Password Changed" : "Verification Failed"}</b>\n\n` +
           `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
           `🆔 <code>${userId}</code>\n` +
-          `🖥 ${raw.platform} — ${raw.brokerName ?? raw.broker ?? "—"}\n` +
-          `🏦 Server: <code>${raw.serverName}</code>\n\n` +
+          `🖥 ${raw.platform} — ${raw.brokerName ?? raw.broker ?? "—"}\n\n` +
           `<b>Error:</b> ${result.error}`,
           {
             parse_mode: "HTML",
@@ -475,10 +505,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     }
 
     await ctx.reply(
-      `✅ <b>Verification Complete</b>\n\n` +
-      `  ✅ Passed:  ${passed}\n` +
-      `  ❌ Failed:  ${failed}\n` +
-      `  ⏭ Skipped: ${skipped}\n\n` +
+      `✅ <b>Verification Complete</b>\n\n  ✅ Passed: ${passed}\n  ❌ Failed: ${failed}\n  ⏭ Skipped: ${skipped}\n\n` +
       `${failed > 0 ? "⚠️ Use /listaccounts to revoke flagged accounts." : "All accounts verified successfully."}`,
       { parse_mode: "HTML" }
     );
@@ -493,7 +520,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     if (isNaN(targetId)) {
       await ctx.reply(
-        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 123456789</code>\n\nTip: Use /listaccounts for a button-based interface.`,
+        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nTip: Use /listaccounts for button-based revocation.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -501,10 +528,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
-      await ctx.reply(
-        `⚠️ <b>No active account</b> found for user <code>${targetId}</code>.`,
-        { parse_mode: "HTML" }
-      );
+      await ctx.reply(`⚠️ No active account found for user <code>${targetId}</code>.`, { parse_mode: "HTML" });
       return;
     }
 
@@ -513,8 +537,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     await ctx.reply(
       `✍️ <b>Manual Revocation</b>\n\n` +
-      `You are revoking:\n` +
-      `👤 <b>${raw.fullName ?? "Unknown"}</b> (ID: <code>${targetId}</code>)\n` +
+      `You are revoking:\n👤 <b>${raw.fullName ?? "Unknown"}</b> (ID: <code>${targetId}</code>)\n` +
       `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? "—"}\n\n` +
       `Please type the <b>reason</b> to send to the user.\n\n` +
       `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
@@ -542,33 +565,23 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     await ctx.reply(`✅ Rejection cancelled. The submission is still pending.`);
   });
 
-  // ── 🔧 /debugredis — list every key in Redis so we can find the right pattern
+  // ── 🔧 /debugredis ────────────────────────────────────────────────────────
   bot.command("debugredis", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
-
     const allKeys = await r().keys("*");
-
     if (!allKeys || allKeys.length === 0) {
       await ctx.reply(`🔧 <b>Redis Debug</b>\n\nNo keys found in Redis at all.`, { parse_mode: "HTML" });
       return;
     }
-
     const chunks: string[] = [];
     let current = `🔧 <b>Redis Keys (${allKeys.length} total):</b>\n\n`;
-
     for (const key of allKeys) {
       const line = `• <code>${key}</code>\n`;
-      if ((current + line).length > 3800) {
-        chunks.push(current);
-        current = "";
-      }
+      if ((current + line).length > 3800) { chunks.push(current); current = ""; }
       current += line;
     }
     if (current) chunks.push(current);
-
-    for (const chunk of chunks) {
-      await ctx.reply(chunk, { parse_mode: "HTML" });
-    }
+    for (const chunk of chunks) await ctx.reply(chunk, { parse_mode: "HTML" });
   });
 
   // ── Noop ──────────────────────────────────────────────────────────────────
