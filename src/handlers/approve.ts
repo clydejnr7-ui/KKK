@@ -17,10 +17,14 @@ function isAdminChannel(ctx: Context): boolean {
   return !!adminChannelId && ctx.chat?.id.toString() === adminChannelId;
 }
 
+function getCmdText(ctx: Context): string {
+  return (ctx.message?.text ?? (ctx as any).channelPost?.text ?? "").trim();
+}
+
 async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> {
   if (!isAdminChannel(ctx)) { await next(); return; }
 
-  const text = (ctx.message?.text ?? (ctx as any).channelPost?.text ?? "").trim();
+  const text = getCmdText(ctx);
   if (!text || text.startsWith("/")) { await next(); return; }
 
   const adminChatId = ctx.chat!.id.toString();
@@ -400,7 +404,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   bot.command("fixbutton", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
-    const parts = ctx.message?.text?.trim().split(/\s+/) ?? [];
+    const parts = getCmdText(ctx).split(/\s+/);
     const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
 
     if (isNaN(targetId)) {
@@ -501,11 +505,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           {
             parse_mode: "HTML",
             reply_markup: {
-              inline_keyboard: [[
-                { text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }
-              ], [
-                { text: "🔁 Skip for Now", callback_data: "noop" }
-              ]]
+              inline_keyboard: [
+                [{ text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }],
+                [{ text: "🔁 Skip for Now", callback_data: "noop" }]
+              ]
             }
           }
         );
@@ -519,16 +522,16 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 🔑 /revokeaccount <userId> ────────────────────────────────────────────
+  // ── 🔑 /revokeaccount <userId> ── FIXED for channel_post context ──────────
   bot.command("revokeaccount", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
-    const parts = ctx.message?.text?.trim().split(/\s+/);
-    const targetId = parts && parts[1] ? parseInt(parts[1], 10) : NaN;
+    const parts = getCmdText(ctx).split(/\s+/);
+    const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
 
     if (isNaN(targetId)) {
-      await ctx.reply(
-        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nTip: Use /listaccounts for button-based revocation.`,
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 7764271121</code>\n\nTip: Use /listaccounts for button-based revocation.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -536,17 +539,20 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
-      await ctx.reply(`⚠️ No active account found for user <code>${targetId}</code>.`, { parse_mode: "HTML" });
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ No active account found for user <code>${targetId}</code>.`,
+        { parse_mode: "HTML" }
+      );
       return;
     }
 
-    const adminChatId = ctx.chat.id.toString();
+    const adminChatId = ctx.chat!.id.toString();
     await r().set(`revoke_reason:${adminChatId}`, targetId, { ex: 300 });
 
-    await ctx.reply(
+    await ctx.api.sendMessage(ctx.chat!.id,
       `✍️ <b>Manual Revocation</b>\n\n` +
       `You are revoking:\n👤 <b>${raw.fullName ?? "Unknown"}</b> (ID: <code>${targetId}</code>)\n` +
-      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? "—"}\n\n` +
+      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n\n` +
       `Please type the <b>reason</b> to send to the user.\n\n` +
       `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
       { parse_mode: "HTML" }
@@ -556,56 +562,48 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   // ── /cancel_revoke ────────────────────────────────────────────────────────
   bot.command("cancel_revoke", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
-    const adminChatId = ctx.chat.id.toString();
+    const adminChatId = ctx.chat!.id.toString();
     const pending = await r().get(`revoke_reason:${adminChatId}`);
-    if (!pending) { await ctx.reply(`ℹ️ No revocation in progress.`); return; }
+    if (!pending) { await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No revocation in progress.`); return; }
     await r().del(`revoke_reason:${adminChatId}`);
-    await ctx.reply(`✅ Revocation cancelled. The account remains active.`);
+    await ctx.api.sendMessage(ctx.chat!.id, `✅ Revocation cancelled. The account remains active.`);
   });
 
   // ── /cancel_reject ────────────────────────────────────────────────────────
   bot.command("cancel_reject", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
-    const adminChatId = ctx.chat.id.toString();
+    const adminChatId = ctx.chat!.id.toString();
     const pending = await r().get(`reject_reason:${adminChatId}`);
-    if (!pending) { await ctx.reply(`ℹ️ No rejection in progress.`); return; }
+    if (!pending) { await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No rejection in progress.`); return; }
     await r().del(`reject_reason:${adminChatId}`);
-    await ctx.reply(`✅ Rejection cancelled. The submission is still pending.`);
+    await ctx.api.sendMessage(ctx.chat!.id, `✅ Rejection cancelled. The submission is still pending.`);
   });
 
-  // ── 🔧 /testbutton — diagnose inline keyboard issues ─────────────────────
+  // ── 🔧 /testbutton ────────────────────────────────────────────────────────
   bot.command("testbutton", async (ctx) => {
     const chatId = ctx.chat!.id;
     const adminChannelId = process.env.ADMIN_CHANNEL_ID ?? "NOT SET";
 
     if (!isAdminChannel(ctx)) {
-      await ctx.api.sendMessage(
-        chatId,
-        `❌ <b>isAdminChannel = FALSE</b>\n\n` +
-        `Chat ID seen by bot: <code>${chatId}</code>\n` +
-        `ADMIN_CHANNEL_ID env: <code>${adminChannelId}</code>\n\n` +
-        `These must match exactly. Update your ADMIN_CHANNEL_ID env var on Vercel.`,
+      await ctx.api.sendMessage(chatId,
+        `❌ <b>isAdminChannel = FALSE</b>\n\nChat ID: <code>${chatId}</code>\nADMIN_CHANNEL_ID env: <code>${adminChannelId}</code>\n\nThese must match exactly.`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
     await ctx.api.sendMessage(chatId,
-      `✅ <b>isAdminChannel = TRUE</b>\n\nChat ID: <code>${chatId}</code>\n\nNow sending a message with a button...`,
+      `✅ <b>isAdminChannel = TRUE</b>\n\nChat ID: <code>${chatId}</code>\n\nSending button test...`,
       { parse_mode: "HTML" }
     );
 
-    await ctx.api.sendMessage(
-      chatId,
-      `If you see a button below, inline keyboards work perfectly in this channel:`,
-      {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: "🔑 Test Revoke Button — tap me", callback_data: "noop" }
-          ]]
-        }
+    await ctx.api.sendMessage(chatId, `Tap below to confirm inline keyboards work:`, {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "🔑 Test Revoke Button — tap me", callback_data: "noop" }
+        ]]
       }
-    );
+    });
   });
 
   // ── 🔧 /debugredis ────────────────────────────────────────────────────────
@@ -613,7 +611,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!isAdminChannel(ctx)) return;
     const allKeys = await r().keys("*");
     if (!allKeys || allKeys.length === 0) {
-      await ctx.reply(`🔧 <b>Redis Debug</b>\n\nNo keys found in Redis at all.`, { parse_mode: "HTML" });
+      await ctx.api.sendMessage(ctx.chat!.id, `🔧 <b>Redis Debug</b>\n\nNo keys found.`, { parse_mode: "HTML" });
       return;
     }
     const chunks: string[] = [];
@@ -624,7 +622,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       current += line;
     }
     if (current) chunks.push(current);
-    for (const chunk of chunks) await ctx.reply(chunk, { parse_mode: "HTML" });
+    for (const chunk of chunks) await ctx.api.sendMessage(ctx.chat!.id, chunk, { parse_mode: "HTML" });
   });
 
   // ── Noop ──────────────────────────────────────────────────────────────────
