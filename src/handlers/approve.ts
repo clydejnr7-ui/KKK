@@ -350,13 +350,14 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 📋 /listaccounts — all approved accounts with permanent revoke buttons ─
+  // ── 📋 /listaccounts — scans ALL acct:* keys, works for past accounts too ─
   bot.command("listaccounts", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
-    const userIds = await getAllActiveUserIds();
+    // Use keys() to find every acct:* entry — catches old accounts never in the set
+    const keys = await r().keys("acct:*");
 
-    if (userIds.length === 0) {
+    if (!keys || keys.length === 0) {
       await ctx.reply(
         `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
         `ℹ️ No approved accounts found.`,
@@ -367,17 +368,18 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     await ctx.reply(
       `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
-      `<b>${userIds.length} approved account${userIds.length !== 1 ? "s" : ""}</b> — each card has a live Revoke button.\n\n` +
-      `To revoke, tap the button on any card below. You will be asked to type a reason first.`,
+      `<b>${keys.length} approved account${keys.length !== 1 ? "s" : ""}</b> — each card has a live Revoke button.\n\n` +
+      `To revoke, tap the button on any card. You will be asked to type a reason first.`,
       { parse_mode: "HTML" }
     );
 
-    for (const userId of userIds) {
-      const raw = await r().get<any>(`acct:${userId}`);
-      if (!raw) {
-        await r().srem("active_accounts", userId);
-        continue;
-      }
+    for (const key of keys) {
+      const raw = await r().get<any>(key);
+      if (!raw) continue;
+
+      // Extract userId from "acct:{userId}" and backfill the active_accounts set
+      const userId = Number(key.replace("acct:", ""));
+      await r().sadd("active_accounts", userId);
 
       const startDate = raw.startDate ? new Date(raw.startDate) : null;
       const daysActive = startDate
@@ -405,23 +407,26 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   bot.command("verifyaccounts", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
-    const userIds = await getAllActiveUserIds();
+    const keys = await r().keys("acct:*");
 
-    if (userIds.length === 0) {
+    if (!keys || keys.length === 0) {
       await ctx.reply(`ℹ️ <b>No active accounts found.</b>`, { parse_mode: "HTML" });
       return;
     }
 
     await ctx.reply(
-      `🔍 <b>Verifying ${userIds.length} active account${userIds.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
+      `🔍 <b>Verifying ${keys.length} active account${keys.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
       { parse_mode: "HTML" }
     );
 
     let passed = 0, failed = 0, skipped = 0;
 
-    for (const userId of userIds) {
-      const raw = await r().get<any>(`acct:${userId}`);
-      if (!raw) { await r().srem("active_accounts", userId); skipped++; continue; }
+    for (const key of keys) {
+      const raw = await r().get<any>(key);
+      if (!raw) { skipped++; continue; }
+
+      const userId = Number(key.replace("acct:", ""));
+      await r().sadd("active_accounts", userId);
 
       if (!raw.accountNumber || !raw.serverName || !raw.platform) {
         skipped++;
