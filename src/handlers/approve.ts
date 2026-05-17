@@ -350,6 +350,57 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
+  // ── 📋 /listaccounts — all approved accounts with permanent revoke buttons ─
+  bot.command("listaccounts", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const userIds = await getAllActiveUserIds();
+
+    if (userIds.length === 0) {
+      await ctx.reply(
+        `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
+        `ℹ️ No approved accounts found.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    await ctx.reply(
+      `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
+      `<b>${userIds.length} approved account${userIds.length !== 1 ? "s" : ""}</b> — each card has a live Revoke button.\n\n` +
+      `To revoke, tap the button on any card below. You will be asked to type a reason first.`,
+      { parse_mode: "HTML" }
+    );
+
+    for (const userId of userIds) {
+      const raw = await r().get<any>(`acct:${userId}`);
+      if (!raw) {
+        await r().srem("active_accounts", userId);
+        continue;
+      }
+
+      const startDate = raw.startDate ? new Date(raw.startDate) : null;
+      const daysActive = startDate
+        ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
+        : "—";
+
+      await ctx.reply(
+        `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+        `🆔 <code>${userId}</code>\n` +
+        `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
+        `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
+        `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
+        `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+        `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: new InlineKeyboard()
+            .text("🔑 Revoke Account", `revoke_${userId}`),
+        }
+      );
+    }
+  });
+
   // ── 🔍 /verifyaccounts ────────────────────────────────────────────────────
   bot.command("verifyaccounts", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
@@ -375,7 +426,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       if (!raw.accountNumber || !raw.serverName || !raw.platform) {
         skipped++;
         await ctx.reply(
-          `⚠️ <b>Skipped</b> user <code>${userId}</code> — missing credentials.\nUse /revokeaccount ${userId} to revoke manually.`,
+          `⚠️ <b>Skipped</b> user <code>${userId}</code> — missing credentials.\nUse /listaccounts to revoke manually.`,
           { parse_mode: "HTML" }
         );
         continue;
@@ -424,7 +475,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `  ✅ Passed:  ${passed}\n` +
       `  ❌ Failed:  ${failed}\n` +
       `  ⏭ Skipped: ${skipped}\n\n` +
-      `${failed > 0 ? "⚠️ Revoke flagged accounts above." : "All accounts verified successfully."}`,
+      `${failed > 0 ? "⚠️ Use /listaccounts to revoke flagged accounts." : "All accounts verified successfully."}`,
       { parse_mode: "HTML" }
     );
   });
@@ -438,7 +489,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     if (isNaN(targetId)) {
       await ctx.reply(
-        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 123456789</code>`,
+        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 123456789</code>\n\nTip: Use /listaccounts for a button-based interface.`,
         { parse_mode: "HTML" }
       );
       return;
