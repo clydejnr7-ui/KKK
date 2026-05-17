@@ -343,8 +343,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const keys = await r().keys("acct:*");
 
     if (!keys || keys.length === 0) {
-      await ctx.api.sendMessage(
-        chatId,
+      await ctx.api.sendMessage(chatId,
         `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
         `ℹ️ No approved accounts found.\n\n<i>Run /debugredis to inspect all Redis keys.</i>`,
         { parse_mode: "HTML" }
@@ -352,11 +351,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       return;
     }
 
-    await ctx.api.sendMessage(
-      chatId,
+    await ctx.api.sendMessage(chatId,
       `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
       `<b>${keys.length} approved account${keys.length !== 1 ? "s" : ""}</b>\n\n` +
-      `Each card below has a 🔑 Revoke button. Tap it, then type a reason to send to the user.`,
+      `Each card below has a 🔑 Revoke button. Tap it, then type a reason.`,
       { parse_mode: "HTML" }
     );
 
@@ -373,9 +371,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
           : "—";
 
-        const keyboard = new InlineKeyboard()
-          .text("🔑 Revoke Account", `revoke_${userId}`);
-
         await ctx.api.sendMessage(
           chatId,
           `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
@@ -385,15 +380,23 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
           `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
           `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
-          { parse_mode: "HTML", reply_markup: keyboard }
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }
+              ]]
+            }
+          }
         );
       } catch (e) {
-        console.error(`[listaccounts] Failed to send card for key ${key}:`, e);
+        console.error(`[listaccounts] Error for key ${key}:`, e);
+        await ctx.api.sendMessage(chatId, `⚠️ Error loading account <code>${key}</code>: ${e}`, { parse_mode: "HTML" });
       }
     }
   });
 
-  // ── 🔧 /fixbutton <userId> — post a fresh revoke card for any old account ──
+  // ── 🔧 /fixbutton <userId> ────────────────────────────────────────────────
   bot.command("fixbutton", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -401,8 +404,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
 
     if (isNaN(targetId)) {
-      await ctx.api.sendMessage(
-        ctx.chat!.id,
+      await ctx.api.sendMessage(ctx.chat!.id,
         `⚠️ <b>Usage:</b> <code>/fixbutton &lt;userId&gt;</code>\n\nExample: <code>/fixbutton 7764271121</code>`,
         { parse_mode: "HTML" }
       );
@@ -411,8 +413,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
-      await ctx.api.sendMessage(
-        ctx.chat!.id,
+      await ctx.api.sendMessage(ctx.chat!.id,
         `⚠️ No active account found for user <code>${targetId}</code>.`,
         { parse_mode: "HTML" }
       );
@@ -436,8 +437,11 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
       {
         parse_mode: "HTML",
-        reply_markup: new InlineKeyboard()
-          .text("🔑 Revoke Account", `revoke_${targetId}`),
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "🔑 Revoke Account", callback_data: `revoke_${targetId}` }
+          ]]
+        }
       }
     );
   });
@@ -496,9 +500,13 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           `<b>Error:</b> ${result.error}`,
           {
             parse_mode: "HTML",
-            reply_markup: new InlineKeyboard()
-              .text("🔑 Revoke Account", `revoke_${userId}`).row()
-              .text("🔁 Skip for Now", "noop"),
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }
+              ], [
+                { text: "🔁 Skip for Now", callback_data: "noop" }
+              ]]
+            }
           }
         );
       }
@@ -563,6 +571,41 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!pending) { await ctx.reply(`ℹ️ No rejection in progress.`); return; }
     await r().del(`reject_reason:${adminChatId}`);
     await ctx.reply(`✅ Rejection cancelled. The submission is still pending.`);
+  });
+
+  // ── 🔧 /testbutton — diagnose inline keyboard issues ─────────────────────
+  bot.command("testbutton", async (ctx) => {
+    const chatId = ctx.chat!.id;
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID ?? "NOT SET";
+
+    if (!isAdminChannel(ctx)) {
+      await ctx.api.sendMessage(
+        chatId,
+        `❌ <b>isAdminChannel = FALSE</b>\n\n` +
+        `Chat ID seen by bot: <code>${chatId}</code>\n` +
+        `ADMIN_CHANNEL_ID env: <code>${adminChannelId}</code>\n\n` +
+        `These must match exactly. Update your ADMIN_CHANNEL_ID env var on Vercel.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    await ctx.api.sendMessage(chatId,
+      `✅ <b>isAdminChannel = TRUE</b>\n\nChat ID: <code>${chatId}</code>\n\nNow sending a message with a button...`,
+      { parse_mode: "HTML" }
+    );
+
+    await ctx.api.sendMessage(
+      chatId,
+      `If you see a button below, inline keyboards work perfectly in this channel:`,
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: "🔑 Test Revoke Button — tap me", callback_data: "noop" }
+          ]]
+        }
+      }
+    );
   });
 
   // ── 🔧 /debugredis ────────────────────────────────────────────────────────
