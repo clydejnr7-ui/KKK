@@ -10,8 +10,8 @@ function r(): Redis {
 
 const TTL = 1800; // 30 minutes
 
-// Redis keys used:
-//   support_open:{userId}      "1" — user opened support, can freely type messages
+// Redis keys:
+//   support_open:{userId}      "1" — user opened support, can freely type
 //   user_replying:{userId}     "1" — user tapped Reply, is in back-and-forth mode
 //   admin_reply:{chatId}       userId — admin is replying to this user
 //   admin_reply_msg:{chatId}   messageId — ID of the live status msg in admin chat
@@ -29,7 +29,6 @@ export async function clearSupportStep(userId: number): Promise<void> {
 
 // ── Called from form.ts message:text handler ─────────────────────────────────
 
-// User typed a new support message after tapping "💬 Support"
 export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const active = await r().get(`support_open:${userId}`);
@@ -38,9 +37,7 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  // Keep session alive — user can send multiple messages without re-tapping Support
   await r().set(`support_open:${userId}`, "1", { ex: TTL });
-  // Avoid routing conflict with reply mode
   await r().del(`user_replying:${userId}`);
 
   const name = ctx.from?.first_name ?? "User";
@@ -73,7 +70,6 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   return true;
 }
 
-// User typed a reply after receiving an admin message and tapping "💬 Reply"
 export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const active = await r().get(`user_replying:${userId}`);
@@ -82,7 +78,6 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  // Keep session alive — user can keep replying without re-tapping Reply
   await r().set(`user_replying:${userId}`, "1", { ex: TTL });
 
   const name = ctx.from?.first_name ?? "User";
@@ -115,11 +110,41 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   return true;
 }
 
+// ── Shared helper: update the admin's live status message ────────────────────
+
+async function updateStatusMessage(
+  api: Context["api"],
+  adminChannelId: string,
+  chatId: string,
+  targetUserId: number,
+  label: string
+): Promise<void> {
+  const statusMsgId = await r().get<number>(`admin_reply_msg:${chatId}`);
+  if (statusMsgId) {
+    try {
+      await api.editMessageText(
+        parseInt(chatId),
+        statusMsgId,
+        `✍️ <b>Reply session open</b> → User <code>${targetUserId}</code>\n\n` +
+        `✅ ${label}\n\n` +
+        `Keep typing to send more or <code>/done_reply</code> to end.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    } catch { /* fall through to new message */ }
+  }
+  await api.sendMessage(
+    adminChannelId,
+    `✅ ${label} — keep typing or <code>/done_reply</code> to end.`,
+    { parse_mode: "HTML" }
+  );
+}
+
 // ── Register all support bot handlers ────────────────────────────────────────
 
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
-  // Admin clicks "✉️ Reply to User" button on a support message
+  // Admin clicks "✉️ Reply to User" button
   bot.callbackQuery(/^support_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const targetUserId = parseInt(ctx.match[1], 10);
@@ -127,23 +152,20 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
 
     await r().set(`admin_reply:${adminChatId}`, targetUserId, { ex: TTL });
 
-    // Send a status message and store its ID so we can EDIT it on each delivery
-    // instead of spamming new messages into the chat on every reply
     const sentMsg = await ctx.reply(
       `✍️ <b>Reply session open</b> → User <code>${targetUserId}</code>\n\n` +
-      `Type messages below — each one is sent directly to the user.\n\n` +
+      `Type messages or send files (PDF, images, etc.) — everything goes directly to the user.\n\n` +
       `<code>/done_reply</code> — end this session`,
       { parse_mode: "HTML" }
     );
     await r().set(`admin_reply_msg:${adminChatId}`, sentMsg.message_id, { ex: TTL });
   });
 
-  // User taps "💬 Reply" button under an admin message
+  // User taps "💬 Reply" button
   bot.callbackQuery(/^user_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from!.id;
 
-    // Switch to reply mode — clear support_open to avoid dual routing
     await r().del(`support_open:${userId}`);
     await r().set(`user_replying:${userId}`, "1", { ex: TTL });
 
@@ -157,7 +179,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     );
   });
 
-  // User cancels their support or reply session
+  // User cancels
   bot.callbackQuery("support_cancel", async (ctx) => {
     await ctx.answerCallbackQuery("Cancelled");
     const userId = ctx.from!.id;
@@ -169,16 +191,11 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     });
   });
 
-  // ── Single unified handler for ALL admin chat text ────────────────────────
-  // One handler (not two) eliminates Grammy middleware chain complexity.
-  // No `fromId` filtering — it broke anonymous admin posts in supergroups.
-  // Bots never receive their own messages per Telegram Bot API spec,
-  // so no loop can occur from confirmation messages.
+  // ── Admin text messages ───────────────────────────────────────────────────
   bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     const chatId = ctx.chat?.id?.toString();
 
-    // Only process messages from the configured admin chat
     if (!adminChannelId || chatId !== adminChannelId) {
       await next();
       return;
@@ -193,7 +210,6 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
 
     if (!text) { await next(); return; }
 
-    // /done_reply — admin ends the current reply session
     if (text === "/done_reply") {
       const had = await r().get<number>(`admin_reply:${chatId}`);
       await r().del(`admin_reply:${chatId}`);
@@ -208,21 +224,16 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       return;
     }
 
-    // Pass other slash commands to other handlers (approve.ts etc.)
     if (text.startsWith("/")) { await next(); return; }
 
-    // If approve.ts is waiting for a rejection reason, let it handle this
     const rejectPending = await r().get<number>(`reject_reason:${chatId}`);
     if (rejectPending) { await next(); return; }
 
-    // Check if admin has an active reply session
     const targetUserId = await r().get<number>(`admin_reply:${chatId}`);
     if (!targetUserId) { await next(); return; }
 
-    // Refresh session TTL — admin can keep typing without timing out
     await r().set(`admin_reply:${chatId}`, targetUserId, { ex: TTL });
 
-    // Deliver the message to the user
     try {
       await ctx.api.sendMessage(
         targetUserId,
@@ -239,7 +250,6 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
         }
       );
     } catch (e: any) {
-      // Delivery failed — tell admin
       await ctx.api.sendMessage(
         adminChannelId,
         `❌ <b>Delivery failed</b> to <code>${targetUserId}</code>: ${e?.message ?? "Unknown error"}`,
@@ -248,32 +258,130 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       return;
     }
 
-    // ── Confirm delivery by EDITING the existing status message ─────────────
-    // Using editMessageText instead of sendMessage means we never send new
-    // messages into the admin chat on each delivery — no rate limit risk,
-    // no potential re-triggering from bot messages appearing in the chat.
-    const statusMsgId = await r().get<number>(`admin_reply_msg:${chatId}`);
-    if (statusMsgId) {
+    await updateStatusMessage(ctx.api, adminChannelId, chatId, targetUserId, "Text message delivered.");
+  });
+
+  // ── Admin document/file messages (PDF, HTML, images, video, audio, etc.) ──
+  // This is the handler that was completely missing before.
+  // It mirrors the text handler but uses forwardMessage + sendDocument/sendPhoto
+  // depending on what type of file was sent.
+  bot.on(
+    [
+      "message:document",
+      "channel_post:document",
+      "message:photo",
+      "channel_post:photo",
+      "message:video",
+      "channel_post:video",
+      "message:audio",
+      "channel_post:audio",
+      "message:voice",
+      "channel_post:voice",
+      "message:sticker",
+      "channel_post:sticker",
+    ],
+    async (ctx, next: NextFunction) => {
+      const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+      const chatId = ctx.chat?.id?.toString();
+
+      if (!adminChannelId || chatId !== adminChannelId) {
+        await next();
+        return;
+      }
+
+      const rejectPending = await r().get<number>(`reject_reason:${chatId}`);
+      if (rejectPending) { await next(); return; }
+
+      const targetUserId = await r().get<number>(`admin_reply:${chatId}`);
+      if (!targetUserId) { await next(); return; }
+
+      await r().set(`admin_reply:${chatId}`, targetUserId, { ex: TTL });
+
+      const update = ctx.update as any;
+      const msg = update.message ?? update.channel_post;
+      const caption = msg?.caption ?? undefined;
+
+      // Build the reply keyboard for the user
+      const replyMarkup = new InlineKeyboard()
+        .text("💬 Reply", `user_reply_${targetUserId}`).row()
+        .text("🏠 Main Menu", "menu_main");
+
       try {
-        await ctx.api.editMessageText(
-          parseInt(chatId),
-          statusMsgId,
-          `✍️ <b>Reply session open</b> → User <code>${targetUserId}</code>\n\n` +
-          `✅ Last message delivered.\n\n` +
-          `Keep typing to send more or <code>/done_reply</code> to end.`,
+        if (msg?.document) {
+          await ctx.api.sendDocument(targetUserId, msg.document.file_id, {
+            caption: caption
+              ? `💬 <b>From Trading Flux Support</b>\n\n${caption}`
+              : `💬 <b>File from Trading Flux Support</b>`,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+          });
+        } else if (msg?.photo) {
+          // Telegram sends multiple photo sizes — use the last (largest)
+          const photo = msg.photo[msg.photo.length - 1];
+          await ctx.api.sendPhoto(targetUserId, photo.file_id, {
+            caption: caption
+              ? `💬 <b>From Trading Flux Support</b>\n\n${caption}`
+              : `💬 <b>Image from Trading Flux Support</b>`,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+          });
+        } else if (msg?.video) {
+          await ctx.api.sendVideo(targetUserId, msg.video.file_id, {
+            caption: caption
+              ? `💬 <b>From Trading Flux Support</b>\n\n${caption}`
+              : `💬 <b>Video from Trading Flux Support</b>`,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+          });
+        } else if (msg?.audio) {
+          await ctx.api.sendAudio(targetUserId, msg.audio.file_id, {
+            caption: caption
+              ? `💬 <b>From Trading Flux Support</b>\n\n${caption}`
+              : undefined,
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+          });
+        } else if (msg?.voice) {
+          await ctx.api.sendVoice(targetUserId, msg.voice.file_id, {
+            caption: caption ?? undefined,
+            reply_markup: replyMarkup,
+          });
+        } else if (msg?.sticker) {
+          await ctx.api.sendSticker(targetUserId, msg.sticker.file_id, {
+            reply_markup: replyMarkup,
+          });
+        } else {
+          await next();
+          return;
+        }
+      } catch (e: any) {
+        await ctx.api.sendMessage(
+          adminChannelId,
+          `❌ <b>File delivery failed</b> to <code>${targetUserId}</code>: ${e?.message ?? "Unknown error"}`,
           { parse_mode: "HTML" }
         );
-        return; // done — edited successfully
-      } catch {
-        // Edit failed (message too old, permissions) — fall through to new message
+        return;
       }
-    }
 
-    // Fallback: send a new confirmation if edit was not possible
-    await ctx.api.sendMessage(
-      adminChannelId,
-      `✅ Delivered to <code>${targetUserId}</code>. Keep typing or <code>/done_reply</code> to end.`,
-      { parse_mode: "HTML" }
-    );
-  });
+      const fileType = msg?.document
+        ? (msg.document.file_name ?? "File")
+        : msg?.photo
+        ? "Image"
+        : msg?.video
+        ? "Video"
+        : msg?.audio
+        ? "Audio"
+        : msg?.voice
+        ? "Voice message"
+        : "Sticker";
+
+      await updateStatusMessage(
+        ctx.api,
+        adminChannelId,
+        chatId,
+        targetUserId,
+        `${fileType} delivered.`
+      );
+    }
+  );
 }
