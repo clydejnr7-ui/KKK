@@ -8,26 +8,34 @@ function r(): Redis {
   });
 }
 
+// 30 minute session TTL — long enough for real conversations
+const TTL = 1800;
+
+// ─── Exported helpers (called from form.ts) ───────────────────────────────────
+
 export async function setSupportStep(userId: number): Promise<void> {
-  await r().set(`support_step:${userId}`, true, { ex: 600 });
+  await r().set(`support_open:${userId}`, "1", { ex: TTL });
 }
 
 export async function clearSupportStep(userId: number): Promise<void> {
-  await r().del(`support_step:${userId}`);
+  await r().del(`support_open:${userId}`);
+  await r().del(`user_replying:${userId}`);
 }
 
+// ─── Called from form.ts message:text handler ────────────────────────────────
+
+// Handles user typing a NEW support message (after tapping "💬 Support")
 export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
-  const active = await r().get(`support_step:${userId}`);
+  const active = await r().get(`support_open:${userId}`);
   if (!active) return false;
 
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  // Keep support_step alive — user can send multiple messages without re-opening support
-  await r().set(`support_step:${userId}`, true, { ex: 600 });
-
-  // Clear any lingering user_replying state to avoid routing conflicts
+  // Refresh session — user can send multiple messages without re-tapping Support
+  await r().set(`support_open:${userId}`, "1", { ex: TTL });
+  // Clear reply mode to avoid routing conflict
   await r().del(`user_replying:${userId}`);
 
   const name = ctx.from?.first_name ?? "User";
@@ -36,7 +44,7 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   try {
     await ctx.api.sendMessage(
       process.env.ADMIN_CHANNEL_ID!,
-      `💬 <b>SUPPORT REQUEST</b>\n\n` +
+      `💬 <b>SUPPORT MESSAGE</b>\n\n` +
       `👤 <b>${name}</b> (${username})\n` +
       `🆔 User ID: <code>${userId}</code>\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -52,17 +60,17 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   await ctx.reply(
     `✅ *Message sent to support!*\n\n` +
     `Our team will reply to you here shortly.\n\n` +
-    `_You can keep typing more messages below, or tap the button to return to the menu._`,
+    `_You can keep typing more messages below._`,
     {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard()
-        .text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
     }
   );
 
   return true;
 }
 
+// Handles user typing a REPLY to an admin message (after tapping "💬 Reply")
 export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const active = await r().get(`user_replying:${userId}`);
@@ -71,13 +79,16 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
+  // Refresh session — user can send multiple replies without re-tapping Reply
+  await r().set(`user_replying:${userId}`, "1", { ex: TTL });
+
   const name = ctx.from?.first_name ?? "User";
   const username = ctx.from?.username ? `@${ctx.from.username}` : "no username";
 
   try {
     await ctx.api.sendMessage(
       process.env.ADMIN_CHANNEL_ID!,
-      `💬 <b>USER REPLY</b>\n\n` +
+      `↩️ <b>USER REPLY</b>\n\n` +
       `👤 <b>${name}</b> (${username})\n` +
       `🆔 User ID: <code>${userId}</code>\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -90,122 +101,134 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
-  // Keep user_replying alive — user can keep replying without tapping "💬 Reply" each time
-  await r().set(`user_replying:${userId}`, true, { ex: 600 });
-
   await ctx.reply(
-    `✅ *Message sent!*\n\nOur team will reply shortly.\n\n_You can keep typing below to send more messages._`,
+    `✅ *Message sent!*\n\nOur team will reply shortly.\n\n_Keep typing to send more messages._`,
     {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard()
-        .text("🏠 Main Menu", "menu_main"),
+      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
     }
   );
 
   return true;
 }
 
+// ─── Register support bot handlers ───────────────────────────────────────────
+
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
-  // ── Admin clicks "Reply to User" ─────────────────────────────────────────
+  // Admin clicks "✉️ Reply to User" button on a support message
   bot.callbackQuery(/^support_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
-    const userId = parseInt(ctx.match[1], 10);
+    const targetUserId = parseInt(ctx.match[1], 10);
     const adminChatId = ctx.chat!.id.toString();
 
-    await r().set(`support_reply:${adminChatId}`, userId, { ex: 600 });
+    // Store who the admin is replying to
+    await r().set(`admin_reply:${adminChatId}`, targetUserId, { ex: TTL });
 
-    await ctx.api.sendMessage(
-      adminChatId,
-      `✍️ <b>Reply to User ${userId}</b>\n\n` +
-      `Type your messages in this chat — each one will be delivered directly to them.\n\n` +
-      `<i>Type</i> <code>/cancel_reply</code> <i>to stop replying to this user.</i>`,
+    await ctx.reply(
+      `✍️ <b>Reply session started</b> → User <code>${targetUserId}</code>\n\n` +
+      `Type your messages below. Each one is delivered directly.\n\n` +
+      `Type <code>/done_reply</code> to end this session.`,
       { parse_mode: "HTML" }
     );
   });
 
-  // ── /cancel_reply ─────────────────────────────────────────────────────────
-  bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
-    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-    const chatId = ctx.chat?.id?.toString();
-    if (!adminChannelId || chatId !== adminChannelId) { await next(); return; }
+  // User taps "💬 Reply" button under an admin reply
+  bot.callbackQuery(/^user_reply_(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const userId = ctx.from!.id;
 
-    const update = ctx.update as any;
+    // Reply mode takes over — clear support_open to avoid dual routing
+    await r().del(`support_open:${userId}`);
+    await r().set(`user_replying:${userId}`, "1", { ex: TTL });
 
-    // CRITICAL: skip bot-generated channel posts — they have no `from` field.
-    // Without this check, the bot's own "✅ Reply delivered" message re-triggers
-    // this handler and creates an infinite delivery loop.
-    const fromId = update.message?.from?.id ?? update.channel_post?.from?.id;
-    if (!fromId) { await next(); return; }
-
-    const text: string = (update.message?.text ?? update.channel_post?.text ?? "").trim();
-
-    if (text === "/cancel_reply") {
-      const had = await r().get(`support_reply:${chatId}`);
-      await r().del(`support_reply:${chatId}`);
-      await ctx.api.sendMessage(
-        adminChannelId,
-        had
-          ? `✅ <b>Reply session ended.</b> You are no longer replying to user <code>${had}</code>.`
-          : `ℹ️ No reply session was in progress.`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    await next();
+    await ctx.reply(
+      `✍️ *Type your reply below* — it goes straight to our support team.\n\n` +
+      `_Keep typing to send as many messages as you need._`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
+      }
+    );
   });
 
-  // ── Catch ALL admin text ──────────────────────────────────────────────────
+  // User cancels their support session
+  bot.callbackQuery("support_cancel", async (ctx) => {
+    await ctx.answerCallbackQuery("Cancelled");
+    const userId = ctx.from!.id;
+    await r().del(`support_open:${userId}`);
+    await r().del(`user_replying:${userId}`);
+    await ctx.reply(`✅ *Cancelled.*`, {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
+    });
+  });
+
+  // ── Single unified handler for ALL text from the admin chat ──────────────
+  // Using one handler instead of two prevents middleware chain confusion.
+  // No `fromId` filtering — that broke anonymous admin posts in supergroups.
+  // Bots do not receive their own messages per Telegram Bot API spec, so
+  // the delivery confirmations we send here cannot re-trigger this handler.
   bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     const chatId = ctx.chat?.id?.toString();
 
+    // Only handle messages coming from the admin chat
     if (!adminChannelId || chatId !== adminChannelId) {
       await next();
       return;
     }
 
     const update = ctx.update as any;
-
-    // CRITICAL: skip bot-generated channel posts — they have no `from` field.
-    // The bot's confirmation messages ("✅ Reply delivered") are channel_post
-    // events with no `from`. Without this guard they re-enter the handler,
-    // deliver the confirmation text to the user, and spiral into a loop.
-    const fromId = update.message?.from?.id ?? update.channel_post?.from?.id;
-    if (!fromId) {
-      await next();
-      return;
-    }
-
     const text: string = (
       update.message?.text ??
       update.channel_post?.text ??
       ""
     ).trim();
 
-    if (!text || text.startsWith("/")) {
+    if (!text) {
       await next();
       return;
     }
 
-    // If admin is typing a rejection reason — let approve.ts handle it
+    // /done_reply — admin ends the current reply session
+    if (text === "/done_reply") {
+      const had = await r().get<number>(`admin_reply:${chatId}`);
+      await r().del(`admin_reply:${chatId}`);
+      await ctx.api.sendMessage(
+        adminChannelId,
+        had
+          ? `✅ <b>Reply session ended</b> for user <code>${had}</code>.`
+          : `ℹ️ No active reply session.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    // Skip other slash commands — let approve.ts and others handle them
+    if (text.startsWith("/")) {
+      await next();
+      return;
+    }
+
+    // If approve.ts is waiting for a rejection reason, let it handle this
     const rejectPending = await r().get<number>(`reject_reason:${chatId}`);
     if (rejectPending) {
       await next();
       return;
     }
 
-    const targetUserId = await r().get<number>(`support_reply:${chatId}`);
+    // Check if admin has an active reply session
+    const targetUserId = await r().get<number>(`admin_reply:${chatId}`);
     if (!targetUserId) {
       await next();
       return;
     }
 
-    // Refresh session TTL — keeps admin in reply mode without re-clicking
-    await r().set(`support_reply:${chatId}`, targetUserId, { ex: 600 });
+    // Refresh the session TTL so admin can keep replying without timeout
+    await r().set(`admin_reply:${chatId}`, targetUserId, { ex: TTL });
 
-    let delivered = false;
+    // Deliver the message to the user
     try {
       await ctx.api.sendMessage(
         targetUserId,
@@ -221,39 +244,19 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
             .text("🏠 Main Menu", "menu_main"),
         }
       );
-      delivered = true;
+
+      // Confirm delivery — safe because bots do not receive their own messages
+      await ctx.api.sendMessage(
+        adminChannelId,
+        `✅ Delivered to <code>${targetUserId}</code> — keep typing or type <code>/done_reply</code> to end.`,
+        { parse_mode: "HTML" }
+      );
     } catch (e: any) {
       await ctx.api.sendMessage(
         adminChannelId,
-        `❌ <b>Failed to deliver reply</b> to user <code>${targetUserId}</code>.\n\n` +
-        `Reason: ${e?.message ?? "Unknown error"}\n\n` +
-        `<i>The user may have blocked the bot.</i>`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    if (delivered) {
-      await ctx.api.sendMessage(
-        adminChannelId,
-        `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.\n\n` +
-        `<i>Session active — keep typing to send more, or type</i> <code>/cancel_reply</code> <i>to end.</i>`,
+        `❌ <b>Failed to deliver</b> to <code>${targetUserId}</code>\n\nReason: ${e?.message ?? "Unknown"}\n\n<i>The user may have blocked the bot.</i>`,
         { parse_mode: "HTML" }
       );
     }
-  });
-
-  // ── User taps "💬 Reply" under an admin reply message ─────────────────────
-  bot.callbackQuery(/^user_reply_(\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const userId = ctx.from!.id;
-    await r().set(`user_replying:${userId}`, true, { ex: 600 });
-    await ctx.reply(
-      `✍️ *Type your reply below* and send it — it will go straight to the support team.\n\n_You can send as many messages as you need._`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
-      }
-    );
   });
 }
