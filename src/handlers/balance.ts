@@ -20,7 +20,6 @@ function r(): Redis {
 async function getAccount(userId: number): Promise<{ data: AccountData; isDemo: boolean } | null> {
   const raw = await r().get<AccountData>(`acct:${userId}`);
   if (!raw) return null;
-  // Redis stores startDate as ISO string — convert back to Date object
   const data: AccountData = {
     ...raw,
     startDate: new Date(raw.startDate as unknown as string),
@@ -51,6 +50,23 @@ export async function registerAccount(
     metaApiAccountId,
     serverName,
   });
+  await r().sadd("active_accounts", userId);
+}
+
+export async function revokeAccount(userId: number): Promise<AccountData | null> {
+  const raw = await r().get<AccountData>(`acct:${userId}`);
+  if (!raw) return null;
+  await r().del(`acct:${userId}`);
+  await r().srem("active_accounts", userId);
+  return {
+    ...raw,
+    startDate: new Date(raw.startDate as unknown as string),
+  };
+}
+
+export async function getAllActiveUserIds(): Promise<number[]> {
+  const members = await r().smembers<number[]>("active_accounts");
+  return members.map((m) => Number(m));
 }
 
 function overviewKeyboard(): InlineKeyboard {
@@ -121,7 +137,7 @@ async function sendPendingReview(ctx: Context, edit = false) {
     `📩 You will be messaged here when approved.`;
   const keyboard = new InlineKeyboard().text("🏠 Main Menu", "menu_main");
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { } }
   await ctx.reply(text, opts);
 }
 
@@ -146,7 +162,7 @@ async function sendNotRegistered(ctx: Context, edit = false) {
     .text("📝 Register Account", "menu_register").row()
     .text("🏠 Main Menu", "menu_main");
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { } }
   await ctx.reply(text, opts);
 }
 
@@ -167,9 +183,6 @@ async function sendDashboard(
   }
 
   const { data, isDemo } = account;
-
-  // Live balance via MetaAPI is not used — balance is calculated from
-  // deposit + start date using compound projections (+3%/day).
   const live: LiveBalance | undefined = undefined;
 
   let text: string;
@@ -194,7 +207,7 @@ async function sendDashboard(
   }
 
   const opts = { parse_mode: "Markdown" as const, reply_markup: keyboard };
-  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { /* fall through */ } }
+  if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { } }
   await ctx.reply(text, opts);
 }
 
