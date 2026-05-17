@@ -24,10 +24,10 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   const text = (ctx.message as any)?.text?.trim() ?? "";
   if (!text || text.startsWith("/")) return false;
 
-  // Keep support_step alive so user can send multiple messages without re-opening support
+  // Keep support_step alive — user can send multiple messages without re-opening support
   await r().set(`support_step:${userId}`, true, { ex: 600 });
 
-  // Also clear any lingering user_replying state to avoid routing conflicts
+  // Clear any lingering user_replying state to avoid routing conflicts
   await r().del(`user_replying:${userId}`);
 
   const name = ctx.from?.first_name ?? "User";
@@ -63,8 +63,6 @@ export async function handleSupportTextInput(ctx: Context): Promise<boolean> {
   return true;
 }
 
-// Called from form.ts when a user taps "💬 Reply" in a support reply from admin.
-// Skips the prompt — user just types directly.
 export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const active = await r().get(`user_replying:${userId}`);
@@ -92,7 +90,7 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
     );
   } catch { /* non-fatal */ }
 
-  // Keep user_replying alive so user can keep sending without tapping "💬 Reply" each time
+  // Keep user_replying alive — user can keep replying without tapping "💬 Reply" each time
   await r().set(`user_replying:${userId}`, true, { ex: 600 });
 
   await ctx.reply(
@@ -109,13 +107,12 @@ export async function handleUserReplyToSupport(ctx: Context): Promise<boolean> {
 
 export function registerSupportHandlers(bot: Bot<Context>): void {
 
-  // ── Admin clicks "Reply to User" OR "Reply Again" ─────────────────────────
+  // ── Admin clicks "Reply to User" ─────────────────────────────────────────
   bot.callbackQuery(/^support_reply_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
     const adminChatId = ctx.chat!.id.toString();
 
-    // Store: admin channel → target user ID
     await r().set(`support_reply:${adminChatId}`, userId, { ex: 600 });
 
     await ctx.api.sendMessage(
@@ -127,13 +124,20 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     );
   });
 
-  // ── /cancel_reply — abort a pending reply ─────────────────────────────────
+  // ── /cancel_reply ─────────────────────────────────────────────────────────
   bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     const chatId = ctx.chat?.id?.toString();
     if (!adminChannelId || chatId !== adminChannelId) { await next(); return; }
 
     const update = ctx.update as any;
+
+    // CRITICAL: skip bot-generated channel posts — they have no `from` field.
+    // Without this check, the bot's own "✅ Reply delivered" message re-triggers
+    // this handler and creates an infinite delivery loop.
+    const fromId = update.message?.from?.id ?? update.channel_post?.from?.id;
+    if (!fromId) { await next(); return; }
+
     const text: string = (update.message?.text ?? update.channel_post?.text ?? "").trim();
 
     if (text === "/cancel_reply") {
@@ -146,13 +150,13 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
           : `ℹ️ No reply session was in progress.`,
         { parse_mode: "HTML" }
       );
-      return; // consumed — don't call next()
+      return;
     }
 
     await next();
   });
 
-  // ── Catch ALL admin text (groups + channels) ──────────────────────────────
+  // ── Catch ALL admin text ──────────────────────────────────────────────────
   bot.on(["message:text", "channel_post:text"], async (ctx, next: NextFunction) => {
     const adminChannelId = process.env.ADMIN_CHANNEL_ID;
     const chatId = ctx.chat?.id?.toString();
@@ -163,6 +167,17 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
     }
 
     const update = ctx.update as any;
+
+    // CRITICAL: skip bot-generated channel posts — they have no `from` field.
+    // The bot's confirmation messages ("✅ Reply delivered") are channel_post
+    // events with no `from`. Without this guard they re-enter the handler,
+    // deliver the confirmation text to the user, and spiral into a loop.
+    const fromId = update.message?.from?.id ?? update.channel_post?.from?.id;
+    if (!fromId) {
+      await next();
+      return;
+    }
+
     const text: string = (
       update.message?.text ??
       update.channel_post?.text ??
@@ -187,7 +202,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       return;
     }
 
-    // Keep the reply session alive so admin can send multiple messages without re-clicking
+    // Refresh session TTL — keeps admin in reply mode without re-clicking
     await r().set(`support_reply:${chatId}`, targetUserId, { ex: 600 });
 
     let delivered = false;
@@ -222,7 +237,7 @@ export function registerSupportHandlers(bot: Bot<Context>): void {
       await ctx.api.sendMessage(
         adminChannelId,
         `✅ <b>Reply delivered</b> to user <code>${targetUserId}</code>.\n\n` +
-        `<i>Session is still active — keep typing to send more messages, or type</i> <code>/cancel_reply</code> <i>to end it.</i>`,
+        `<i>Session active — keep typing to send more, or type</i> <code>/cancel_reply</code> <i>to end.</i>`,
         { parse_mode: "HTML" }
       );
     }
