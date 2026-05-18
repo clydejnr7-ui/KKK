@@ -22,41 +22,68 @@ export interface LiveBalance {
   server?: string;
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * Effective start date for compounding:
+ *   - If admin set adjustedBalance, compound starts from adjustedDate.
+ *   - Otherwise compound starts from the original startDate.
+ */
+function getEffectiveStart(data: AccountData): Date {
+  if (data.adjustedBalance != null && data.adjustedDate) {
+    return data.adjustedDate instanceof Date
+      ? data.adjustedDate
+      : new Date(data.adjustedDate as unknown as string);
+  }
+  return data.startDate instanceof Date
+    ? data.startDate
+    : new Date(data.startDate as unknown as string);
+}
+
+/**
+ * Profit base:
+ *   - If admin set adjustedBalance, that IS the new principal.
+ *   - Otherwise use the original deposit.
+ *
+ * Example: deposit=$700, adjustedBalance=$1000 → base=$1000.
+ * Net profit shown = currentBalance - $1000 (gains since last update).
+ * The $300 gap from deposit to adjustedBalance is already reflected in the
+ * overview's "Original Deposit vs Base Balance" lines.
+ */
+function getProfitBase(data: AccountData): number {
+  return data.adjustedBalance ?? data.deposit;
+}
+
+/** Fraction of today elapsed, based on real clock time (0–1). */
+function todayFraction(now: Date): number {
+  return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
+}
+
+// ── Core calculations ──────────────────────────────────────────────────────────
+
 export function computeBalance(principal: number, daysElapsed: number): number {
   return principal * Math.pow(1.03, daysElapsed);
 }
 
 export function computeCurrentBalance(data: AccountData, now = new Date()): number {
-  const msPerDay = 86_400_000;
-  if (data.adjustedBalance != null && data.adjustedDate) {
-    const adjDate = data.adjustedDate instanceof Date
-      ? data.adjustedDate
-      : new Date(data.adjustedDate as unknown as string);
-    const daysSince = Math.max(0, Math.floor((now.getTime() - adjDate.getTime()) / msPerDay));
-    return data.adjustedBalance * Math.pow(1.03, daysSince);
-  }
-  const daysElapsed = Math.max(0, Math.floor((now.getTime() - data.startDate.getTime()) / msPerDay));
-  return computeBalance(data.deposit, daysElapsed);
+  const base = getProfitBase(data);
+  const start = getEffectiveStart(data);
+  const daysElapsed = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 86_400_000));
+  return base * Math.pow(1.03, daysElapsed);
 }
 
+/**
+ * Profit earned on day `dayNum` (1-indexed from effectiveStart).
+ *   Day 1 profit = base * 0.03
+ *   Day 2 profit = base * 1.03 * 0.03
+ *   Day N profit = base * 1.03^(N-1) * 0.03
+ */
 export function getDayProfit(data: AccountData, dayNum: number): number {
-  const msPerDay = 86_400_000;
-  if (data.adjustedBalance != null && data.adjustedDate) {
-    const adjDate = data.adjustedDate instanceof Date
-      ? data.adjustedDate
-      : new Date(data.adjustedDate as unknown as string);
-    const adjDayNum = Math.max(0, Math.floor(
-      (adjDate.getTime() - data.startDate.getTime()) / msPerDay
-    ));
-    if (dayNum > adjDayNum) {
-      const daysSinceAdj = dayNum - adjDayNum - 1;
-      const balStart = data.adjustedBalance * Math.pow(1.03, daysSinceAdj);
-      return balStart * 0.03;
-    }
-  }
-  const balStart = computeBalance(data.deposit, dayNum - 1);
-  return balStart * 0.03;
+  const base = getProfitBase(data);
+  return base * Math.pow(1.03, dayNum - 1) * 0.03;
 }
+
+// ── Display helpers ────────────────────────────────────────────────────────────
 
 export function progressBar(percent: number, total = 18): string {
   const capped = Math.min(Math.max(percent, 0), 100);
@@ -79,25 +106,29 @@ function healthDots(score: number): string {
   return "🟢".repeat(filled) + "⚫".repeat(5 - filled);
 }
 
+// ── Tab builders ───────────────────────────────────────────────────────────────
+
 export function buildOverviewTab(data: AccountData, live?: LiveBalance): string {
   const now = new Date();
   const msPerDay = 86_400_000;
-  const daysElapsed = Math.max(0, Math.floor((now.getTime() - data.startDate.getTime()) / msPerDay));
+
+  const effectiveStart = getEffectiveStart(data);
+  const profitBase = getProfitBase(data);
+  const daysElapsed = Math.max(0, Math.floor((now.getTime() - effectiveStart.getTime()) / msPerDay));
 
   const currentBalance = live ? live.balance : computeCurrentBalance(data, now);
 
-  // Profit base: use adjustedBalance if set, otherwise original deposit.
-  // This means profit = growth SINCE the last admin update, not since day 1.
-  const profitBase = (data.adjustedBalance != null) ? data.adjustedBalance : data.deposit;
+  // Net profit = gains compounding from profitBase (not from original deposit)
   const totalProfit = currentBalance - profitBase;
-  const growthPct = profitBase > 0 ? ((currentBalance - profitBase) / profitBase) * 100 : 0;
+  const growthPct = profitBase > 0 ? (totalProfit / profitBase) * 100 : 0;
 
   const nextMilestone = Math.ceil(currentBalance / 1000) * 1000;
   const healthScore = Math.min(100, 50 + daysElapsed * 2);
   const growthBar = progressBar(Math.min(growthPct, 100));
-  const hoursElapsed = (now.getTime() - data.startDate.getTime()) / 3_600_000;
+
   const isFirstDay = daysElapsed === 0;
   const todayDailyEarning = currentBalance * 0.03;
+  const dayFrac = todayFraction(now);
 
   let middleSection: string;
 
@@ -115,11 +146,12 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
       `  ${equityBar}\n` +
       `  🕐 Updated ${agoStr} · 🟢 Connected\n`;
   } else if (isFirstDay) {
+    const hoursElapsed = (now.getTime() - effectiveStart.getTime()) / 3_600_000;
     const hoursLeft = Math.max(0, 24 - hoursElapsed);
     const hh = Math.floor(hoursLeft);
     const mm = Math.floor((hoursLeft - hh) * 60);
     const waitBar = progressBar(Math.min((hoursElapsed / 24) * 100, 100));
-    const firstDayProfit = (data.adjustedBalance ?? data.deposit) * 0.03;
+    const firstDayProfit = profitBase * 0.03;
     middleSection =
       `⏳ *FIRST EARNINGS COUNTDOWN*\n` +
       `${waitBar}  ${Math.floor((hoursElapsed / 24) * 100)}%\n` +
@@ -127,15 +159,12 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
       `  💵 First payout: *${formatUSD(firstDayProfit)}*\n` +
       `  📅 Daily rate: +3.00% compounding\n`;
   } else {
-    const msElapsed = now.getTime() - data.startDate.getTime();
-    const msIntoToday = msElapsed - daysElapsed * msPerDay;
-    const dayFraction = Math.min(1, msIntoToday / msPerDay);
-    const earnedToday = todayDailyEarning * dayFraction;
+    const earnedToday = todayDailyEarning * dayFrac;
     const remaining = todayDailyEarning - earnedToday;
-    const dayBar = progressBar(dayFraction * 100);
+    const dayBar = progressBar(dayFrac * 100);
     middleSection =
       `⚡ *TODAY'S EARNINGS*\n` +
-      `${dayBar}  ${(dayFraction * 100).toFixed(0)}%\n` +
+      `${dayBar}  ${(dayFrac * 100).toFixed(0)}%\n` +
       `  ✅ Earned so far: *${formatUSD(earnedToday)}*\n` +
       `  ⏳ Remaining:     ${formatUSD(remaining)}\n` +
       `  📦 Full day total: ${formatUSD(todayDailyEarning)}\n`;
@@ -145,29 +174,26 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
     ? `🟢 Live · ${data.platform ?? ""} · ${data.broker ?? ""}`
     : `⚪ Estimated · +3%/day compound`;
 
-  // Only show the updated balance note when there's an adjustment
-  const updatedNote = (!live && data.adjustedBalance != null)
-    ? `📌 Updated balance: _${formatUSD(data.adjustedBalance)}_  _(profit base)_\n`
-    : ``;
+  const hasAdjustment = data.adjustedBalance != null;
 
-  // Label changes depending on whether we have an adjusted balance
-  const profitLabel = data.adjustedBalance != null
-    ? `📈 Profit Since Update`
-    : `📈 Net Profit        `;
+  // Show original deposit + updated base (if set) so user sees both
+  const depositLines = hasAdjustment
+    ? `📥 Original Deposit  ${formatUSD(data.deposit)}\n` +
+      `📌 Updated Base      ${formatUSD(data.adjustedBalance!)}\n`
+    : `📥 Original Deposit  ${formatUSD(data.deposit)}\n`;
 
   return (
     `╔═══════════════════════════╗\n` +
     `║  📊  TRADING FLUX  •  LIVE  ║\n` +
     `╚═══════════════════════════╝\n\n` +
     `👤 *${data.fullName}*\n` +
-    `🗓 Since ${data.startDate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}  •  Day *${daysElapsed}*\n\n` +
+    `🗓 Since ${effectiveStart.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}  •  Day *${daysElapsed}*\n\n` +
     `┌─────────────────────────┐\n` +
     `│  💰 CURRENT BALANCE      │\n` +
     `│  *${formatUSD(currentBalance).padEnd(24)}*│\n` +
     `└─────────────────────────┘\n\n` +
-    `📥 Original Deposit  ${formatUSD(data.deposit)}\n` +
-    updatedNote +
-    `${profitLabel}  *${totalProfit >= 0 ? "+" : ""}${formatUSD(totalProfit)}*\n` +
+    depositLines +
+    `📈 Net Profit    *${totalProfit >= 0 ? "+" : ""}${formatUSD(totalProfit)}*\n` +
     `🚀 Growth        *${growthPct >= 0 ? "+" : ""}${growthPct.toFixed(2)}%*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     middleSection +
@@ -183,45 +209,29 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
 export function buildProjectionsTab(data: AccountData): string {
   const now = new Date();
   const msPerDay = 86_400_000;
-  const daysElapsed = Math.max(0, Math.floor((now.getTime() - data.startDate.getTime()) / msPerDay));
+  const effectiveStart = getEffectiveStart(data);
+  const profitBase = getProfitBase(data);
+  const daysElapsed = Math.max(0, Math.floor((now.getTime() - effectiveStart.getTime()) / msPerDay));
   const current = computeCurrentBalance(data, now);
 
-  const adjDate = data.adjustedDate
-    ? (data.adjustedDate instanceof Date ? data.adjustedDate : new Date(data.adjustedDate as unknown as string))
-    : null;
-  const adjDayNum = adjDate
-    ? Math.max(0, Math.floor((adjDate.getTime() - data.startDate.getTime()) / msPerDay))
-    : 0;
-  const projBase = data.adjustedBalance ?? data.deposit;
-
   function projBalance(targetDay: number): string {
-    if (data.adjustedBalance != null && adjDate) {
-      const daysFromAdj = Math.max(0, targetDay - adjDayNum);
-      return formatUSD(data.adjustedBalance * Math.pow(1.03, daysFromAdj));
-    }
-    return formatUSD(computeBalance(data.deposit, targetDay));
+    return formatUSD(profitBase * Math.pow(1.03, targetDay));
   }
 
-  function bar(targetDay: number) {
-    let val: number;
-    if (data.adjustedBalance != null && adjDate) {
-      const daysFromAdj = Math.max(0, targetDay - adjDayNum);
-      val = data.adjustedBalance * Math.pow(1.03, daysFromAdj);
-    } else {
-      val = computeBalance(data.deposit, targetDay);
-    }
-    const pct = ((val / projBase) - 1) * 100;
+  function bar(targetDay: number): string {
+    const val = profitBase * Math.pow(1.03, targetDay);
+    const pct = ((val / profitBase) - 1) * 100;
     return progressBar(Math.min(pct, 200) / 2, 10);
   }
 
-  function tag(d: number) { return daysElapsed >= d ? "✅" : "🔜"; }
+  function tag(d: number): string { return daysElapsed >= d ? "✅" : "🔜"; }
 
   return (
     `╔═══════════════════════════╗\n` +
     `║  📈  GROWTH PROJECTIONS   ║\n` +
     `╚═══════════════════════════╝\n\n` +
     `📥 Original Deposit: *${formatUSD(data.deposit)}*\n` +
-    (data.adjustedBalance != null ? `📌 Updated Balance:  *${formatUSD(data.adjustedBalance)}*\n` : ``) +
+    (data.adjustedBalance != null ? `📌 Compounding Base: *${formatUSD(data.adjustedBalance)}*\n` : ``) +
     `📊 Current: *${formatUSD(current)}*  (Day ${daysElapsed})\n` +
     `📅 Rate: *+3.00% / day compounding*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -238,45 +248,44 @@ export function buildProjectionsTab(data: AccountData): string {
     `  18 months:  *${projBalance(547)}*\n` +
     `  24 months:  *${projBalance(730)}*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `_Compounding from ${formatUSD(projBase)} at +3%/day_`
+    `_Compounding from ${formatUSD(profitBase)} at +3%/day_`
   );
 }
 
 export function buildDailyLogTab(data: AccountData): string {
   const now = new Date();
   const msPerDay = 86_400_000;
-  const daysElapsed = Math.max(0, Math.floor((now.getTime() - data.startDate.getTime()) / msPerDay));
+
+  const effectiveStart = getEffectiveStart(data);
+  const profitBase = getProfitBase(data);
+  const daysElapsed = Math.max(0, Math.floor((now.getTime() - effectiveStart.getTime()) / msPerDay));
 
   const currentBalance = computeCurrentBalance(data, now);
   const todayDailyEarning = currentBalance * 0.03;
 
-  const minuteOfDay = now.getHours() * 60 + now.getMinutes();
-  const dayFraction = minuteOfDay / 1440;
-  const earnedToday = todayDailyEarning * dayFraction;
+  // Use real clock fraction — not startDate-relative math
+  const dayFrac = todayFraction(now);
+  const earnedToday = todayDailyEarning * dayFrac;
   const remainingToday = todayDailyEarning - earnedToday;
+
+  // Total earned = gains compounding from profitBase (matches daily row sum)
+  const totalEarned = currentBalance - profitBase;
 
   const rows: string[] = [];
   const showDays = Math.min(daysElapsed, 7);
 
   for (let i = showDays; i >= 1; i--) {
     const dayNum = daysElapsed - i + 1;
+    // getDayProfit uses profitBase * 1.03^(dayNum-1) * 0.03
     const profit = getDayProfit(data, dayNum);
-    const date = new Date(data.startDate.getTime() + (dayNum - 1) * msPerDay);
+    const date = new Date(effectiveStart.getTime() + (dayNum - 1) * msPerDay);
     const label = date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
     rows.push(`  ${label}  Day ${String(dayNum).padEnd(3)}  +${formatUSD(profit)}`);
   }
 
-  // Profit base: growth since last admin update (or since deposit if no update)
-  const profitBase = (data.adjustedBalance != null) ? data.adjustedBalance : data.deposit;
-  const totalEarned = currentBalance - profitBase;
-
   const adjustedNote = data.adjustedBalance != null
-    ? `\n📌 _Updated balance: ${formatUSD(data.adjustedBalance)}_`
+    ? `\n📌 _Base updated to ${formatUSD(data.adjustedBalance)}_`
     : ``;
-
-  const totalEarnedLabel = data.adjustedBalance != null
-    ? `💰 *Profit since last update:*`
-    : `💰 *Total earned to date:*`;
 
   return (
     `╔═══════════════════════════╗\n` +
@@ -288,7 +297,7 @@ export function buildDailyLogTab(data: AccountData): string {
     `📊 Active for *${daysElapsed} day${daysElapsed === 1 ? "" : "s"}*${adjustedNote}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `⚡ *TODAY  (In Progress)*\n` +
-    `  ${progressBar(dayFraction * 100, 18)}\n` +
+    `  ${progressBar(dayFrac * 100, 18)}\n` +
     `  ✅ Earned so far:  *${formatUSD(earnedToday)}*\n` +
     `  ⏳ Still incoming: ${formatUSD(remainingToday)}\n` +
     `  📦 Full day total: *${formatUSD(todayDailyEarning)}*\n\n` +
@@ -298,7 +307,7 @@ export function buildDailyLogTab(data: AccountData): string {
       ? rows.join("\n")
       : `  _No completed days yet. Check back tomorrow!_`) +
     `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `${totalEarnedLabel}\n` +
+    `💰 *Total earned to date:*\n` +
     `   *+${formatUSD(totalEarned)}*\n\n` +
     `🔁 Profits compound automatically every 24h`
   );
@@ -327,7 +336,7 @@ export function buildAccountTab(data: AccountData, isDemo: boolean, feeBalance?:
     `   Account:  \`${data.accountNumber ?? "—"}\`\n\n` +
     `💵 *Investment*\n` +
     `   Deposit:  *${formatUSD(data.deposit)}*\n` +
-    (data.adjustedBalance != null ? `   Updated:  *${formatUSD(data.adjustedBalance)}*\n` : ``) +
+    (data.adjustedBalance != null ? `   Base:     *${formatUSD(data.adjustedBalance)}*\n` : ``) +
     `   Since:    ${data.startDate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}\n` +
     `   Rate:     *+3.00% / day*\n` +
     feeSection +
