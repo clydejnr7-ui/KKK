@@ -222,5 +222,5 @@ export function registerBalanceHandler(bot: Bot<Context>): void {
   bot.callbackQuery("dash_projections", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "projections", true); });
   bot.callbackQuery("dash_daily", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "daily", true); });
   bot.callbackQuery("dash_account", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "account", true); });
-  bot.callbackQuery("dash_refresh", async (ctx) => { await ctx.answerCallbackQuery("🔄 Refreshed!"); await sendDashboard(ctx, "overview", true); });
+  bot.callbackQuery("dash_refresh", async (ctx) => { await ctx.answerCallbackQuery({ text: "🔄 Refreshed!" }); await sendDashboard(ctx, "overview", true); }); // ✅ Fixed: was answerCallbackQuery("🔄 Refreshed!") — string arg not supported, must use options object
 }
