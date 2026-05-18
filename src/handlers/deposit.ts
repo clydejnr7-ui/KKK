@@ -234,9 +234,6 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
   }
 
   // ── Trading account deposit ───────────────────────────────────────────────
-  // Compute true current balance (honours adjustedBalance if present),
-  // add the deposited amount, then store as new adjustedBalance from today
-  // so profit tracking resets correctly from the new higher base.
   const account = await redis.get<any>(`acct:${pending.userId}`);
   let newBalance: number;
 
@@ -259,6 +256,10 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     newBalance = pending.amount;
   }
 
+  // ── Auto-credit fee wallet with the deposited amount ──────────────────────
+  const newFeeBal = await addFeeBalance(pending.userId, pending.amount);
+  const weeksCovered = Math.floor(newFeeBal / WEEKLY_FEE);
+
   try {
     await ctx.api.sendMessage(
       process.env.ADMIN_CHANNEL_ID!,
@@ -267,6 +268,7 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
       `🌐 Network: <b>${pending.network}</b>\n` +
       `💵 Amount: <b>${pending.amount.toFixed(2)} USDT</b>\n` +
       `💼 New Balance: <b>$${newBalance.toFixed(2)}</b>\n` +
+      `💳 Fee Wallet: <b>$${newFeeBal.toFixed(2)}</b> (${weeksCovered} weeks covered)\n` +
       `🔗 TX: <code>${txId}</code>`,
       { parse_mode: "HTML" }
     );
@@ -281,6 +283,10 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     `💰 *New Balance:* $${newBalance.toFixed(2)}\n` +
     `📅 Compounding continues from today\n` +
     `📈 Rate: *+3% / day*\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💼 *Fee Wallet Credited:* +$${pending.amount.toFixed(2)}\n` +
+    `💳 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
+    `📅 *Weeks Covered:* ${weeksCovered}\n\n` +
     `🔗 TX: \`${txId}\``,
     {
       parse_mode: "Markdown",
