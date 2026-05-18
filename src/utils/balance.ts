@@ -96,7 +96,7 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
 
   const currentBalance = live ? live.balance : computeCurrentBalance(data, now);
 
-  // Profit always shown vs original deposit — so admin bumps are visible
+  // Profit always vs original deposit — reflects full gain including admin bumps
   const totalProfit = currentBalance - data.deposit;
   const growthPct = data.deposit > 0 ? (totalProfit / data.deposit) * 100 : 0;
 
@@ -124,15 +124,18 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
       `  ${equityBar}\n` +
       `  🕐 Updated ${agoStr} · 🟢 Connected\n`;
   } else if (isFirstDay) {
-    const hoursElapsed = (now.getTime() - effectiveStart.getTime()) / 3_600_000;
-    const hoursLeft = Math.max(0, 24 - hoursElapsed);
+    // Count down to midnight — that's when daysElapsed flips to 1 and earnings start
+    const tomorrow = new Date(now);
+    tomorrow.setHours(24, 0, 0, 0);
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    const hoursLeft = msUntilMidnight / 3_600_000;
     const hh = Math.floor(hoursLeft);
     const mm = Math.floor((hoursLeft - hh) * 60);
-    const waitBar = progressBar(Math.min((hoursElapsed / 24) * 100, 100));
+    const waitBar = progressBar(dayFrac * 100);
     const firstDayProfit = profitBase * 0.03;
     middleSection =
       `⏳ *FIRST EARNINGS COUNTDOWN*\n` +
-      `${waitBar}  ${Math.floor((hoursElapsed / 24) * 100)}%\n` +
+      `${waitBar}  ${(dayFrac * 100).toFixed(0)}%\n` +
       `  ⏱ Starts in: *${hh}h ${mm}m*\n` +
       `  💵 First payout: *${formatUSD(firstDayProfit)}*\n` +
       `  📅 Daily rate: +3.00% compounding\n`;
