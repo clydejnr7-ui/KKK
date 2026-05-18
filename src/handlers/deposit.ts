@@ -47,6 +47,12 @@ async function addFeeBalance(userId: number, amount: number): Promise<number> {
   return newBal;
 }
 
+export async function setFeeBalance(userId: number, amount: number): Promise<number> {
+  const newBal = parseFloat(amount.toFixed(2));
+  await r().set(`fee_bal:${userId}`, newBal);
+  return newBal;
+}
+
 async function deductFeeBalance(userId: number): Promise<number> {
   const current = await getFeeBalance(userId);
   const newBal = parseFloat(Math.max(0, current - WEEKLY_FEE).toFixed(2));
@@ -93,6 +99,75 @@ function uniqueAmount(base: number): number {
   return parseFloat((base + cents / 100).toFixed(2));
 }
 
+function fmtUSD(n: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD",
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(n);
+}
+
+// ── Premium receipt builder ────────────────────────────────────────────────────
+function buildReceipt(opts: {
+  type: "deposit" | "fee_wallet";
+  network: Network;
+  amount: number;
+  newTradingBalance?: number;
+  newFeeBalance: number;
+  weeksCovered: number;
+  txId: string;
+  userId: number;
+}): string {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const timeStr = now.toUTCString().slice(17, 22) + " UTC";
+  const receiptNo = `TF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(opts.userId).slice(-4)}`;
+  const txShort = opts.txId.length > 20 ? opts.txId.slice(0, 12) + "..." + opts.txId.slice(-8) : opts.txId;
+  const typeLabel = opts.type === "deposit" ? "Trading Account Deposit" : "Fee Wallet Top-Up";
+
+  let accountSection = "";
+  if (opts.type === "deposit" && opts.newTradingBalance !== undefined) {
+    accountSection =
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `💰 *ACCOUNT SUMMARY*\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `  New Balance:    *${fmtUSD(opts.newTradingBalance)}*\n` +
+      `  Growth Rate:    *+3.00% / day*\n` +
+      `  Compounding:    ✅ Active\n\n`;
+  }
+
+  return (
+    `╔═══════════════════════════╗\n` +
+    `║  🧾  TRADING FLUX          ║\n` +
+    `║  OFFICIAL RECEIPT          ║\n` +
+    `╚═══════════════════════════╝\n\n` +
+    `  📄 Receipt No: \`${receiptNo}\`\n` +
+    `  📅 Date: *${dateStr}*\n` +
+    `  🕐 Time: *${timeStr}*\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *TRANSACTION DETAILS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `  Type:       *${typeLabel}*\n` +
+    `  Network:    *${opts.network === "TRC20" ? "TRON (TRC20)" : "Ethereum (ERC20)"}*\n` +
+    `  Amount:     *${opts.amount.toFixed(2)} USDT*\n` +
+    `  Status:     ✅ *CONFIRMED*\n\n` +
+    accountSection +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `💼 *FEE WALLET*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `  Credited:       *+${fmtUSD(opts.amount)}*\n` +
+    `  New Balance:    *${fmtUSD(opts.newFeeBalance)}*\n` +
+    `  Weeks Covered:  *${opts.weeksCovered} weeks*\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🔗 *TX HASH*\n` +
+    `\`${txShort}\`\n\n` +
+    `─────────────────────────\n` +
+    `  _Trading Flux — Professional_\n` +
+    `  _MT4/MT5 Account Management_\n` +
+    `  _© ${now.getFullYear()} All rights reserved_\n` +
+    `─────────────────────────`
+  );
+}
+
 // ── Keyboards ──────────────────────────────────────────────────────────────────
 function networkKeyboard(type: DepositType) {
   return new InlineKeyboard()
@@ -133,9 +208,7 @@ async function sendDepositMenu(ctx: Context, type: DepositType, edit = false) {
 async function sendAddressPage(ctx: Context, network: Network, type: DepositType) {
   const coin = WALLET[network];
   const isDeposit = type === "deposit";
-  const amountLabel = isDeposit
-    ? `Minimum $${MIN_DEPOSIT} USDT`
-    : `Minimum $${MIN_FEE_TOPUP} USDT`;
+  const amountLabel = isDeposit ? `Minimum $${MIN_DEPOSIT} USDT` : `Minimum $${MIN_FEE_TOPUP} USDT`;
 
   await ctx.reply(
     `┌─────────────────────────┐\n` +
@@ -161,7 +234,6 @@ async function checkTRC20(p: PendingDeposit): Promise<{ found: boolean; txId?: s
   const url =
     `https://api.trongrid.io/v1/accounts/${WALLET.TRC20.address}/transactions/trc20` +
     `?only_to=true&contract_address=${USDT_TRC20_CONTRACT}&min_timestamp=${p.timestamp}&limit=50`;
-
   const res = await fetch(url, { headers: { "TRON-PRO-API-KEY": TRONGRID_API_KEY } });
   const data: any = await res.json();
   const txs: any[] = data?.data ?? [];
@@ -176,7 +248,6 @@ async function checkERC20(p: PendingDeposit): Promise<{ found: boolean; txId?: s
     `&address=${WALLET.ERC20.address}` +
     `&contractaddress=${USDT_ERC20_CONTRACT}` +
     `&startblock=0&endblock=99999999&sort=desc&apikey=${ETHERSCAN_API_KEY}`;
-
   const res = await fetch(url);
   const data: any = await res.json();
   const txs: any[] = data?.result ?? [];
@@ -221,14 +292,28 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
       `💳 *Weekly Fee Cost:*   $${WEEKLY_FEE}.00\n` +
       `📅 *Weeks Covered:*     ${weeksCovered}\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🔗 TX: \`${txId}\`\n\n` +
-      `You can now pay your weekly fee instantly — no crypto needed each time!`,
+      `🔗 TX: \`${txId}\``,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
           .text("💳 Pay Fee Now ($3)", "menu_fee").row()
+          .text("💼 View Fee Wallet", "dash_account").row()
           .text("🏠 Main Menu", "menu_main"),
       }
+    );
+
+    // Send receipt
+    await ctx.reply(
+      buildReceipt({
+        type: "fee_wallet",
+        network: pending.network,
+        amount: pending.amount,
+        newFeeBalance: newFeeBal,
+        weeksCovered,
+        txId,
+        userId: pending.userId,
+      }),
+      { parse_mode: "Markdown" }
     );
     return;
   }
@@ -246,7 +331,6 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     };
     const currentBalance = computeCurrentBalance(accountData, now);
     newBalance = parseFloat((currentBalance + pending.amount).toFixed(2));
-
     await redis.set(`acct:${pending.userId}`, {
       ...account,
       adjustedBalance: newBalance,
@@ -256,7 +340,7 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     newBalance = pending.amount;
   }
 
-  // ── Auto-credit fee wallet with the deposited amount ──────────────────────
+  // Auto-credit fee wallet with the deposited amount
   const newFeeBal = await addFeeBalance(pending.userId, pending.amount);
   const weeksCovered = Math.floor(newFeeBal / WEEKLY_FEE);
 
@@ -281,19 +365,33 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     `🎉 *${pending.amount.toFixed(2)} USDT* has been credited!\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💰 *New Balance:* $${newBalance.toFixed(2)}\n` +
-    `📅 Compounding continues from today\n` +
     `📈 Rate: *+3% / day*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `💼 *Fee Wallet Credited:* +$${pending.amount.toFixed(2)}\n` +
     `💳 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
-    `📅 *Weeks Covered:* ${weeksCovered}\n\n` +
-    `🔗 TX: \`${txId}\``,
+    `📅 *Weeks Covered:* ${weeksCovered}`,
     {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
         .text("📊 View Dashboard", "menu_balance").row()
+        .text("💼 View Fee Wallet", "dash_account").row()
         .text("🏠 Main Menu", "menu_main"),
     }
+  );
+
+  // Send premium receipt
+  await ctx.reply(
+    buildReceipt({
+      type: "deposit",
+      network: pending.network,
+      amount: pending.amount,
+      newTradingBalance: newBalance,
+      newFeeBalance: newFeeBal,
+      weeksCovered,
+      txId,
+      userId: pending.userId,
+    }),
+    { parse_mode: "Markdown" }
   );
 }
 
