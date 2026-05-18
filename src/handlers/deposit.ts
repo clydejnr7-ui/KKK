@@ -4,21 +4,23 @@ import { computeBalance } from "../utils/balance";
 
 const WALLET = {
   TRC20: {
-    address: "TMqZgyf2wjfrXBudHk3p7uYYGP7D9PZvLt",
+    address: "TD1aR1w19wyCDf9GJpn854K39Ct2tbKczN",
     label: "USDT TRC20",
     network: "TRON (TRC20)",
-    qrUrl: "https://i.8upload.com/image/0ecb47f67b15073b/download-2.png",
+    qrUrl: "https://i.8upload.com/image/bd56036958ca3234/img-20260518-132155-747.jpg",
   },
   ERC20: {
-    address: "0xc2839F2Dd23B42C227DD91664fD0479659fC4610",
+    address: "0xF1dC155EEce939cb1f9f89A58B24aC23FE81D510",
     label: "USDT ERC20",
     network: "Ethereum (ERC20)",
-    qrUrl: "https://i.8upload.com/image/21fc625d9d174723/download-3.png",
+    qrUrl: "https://i.8upload.com/image/c1c7e83dcc27caa8/img-20260518-132950-110.jpg",
   },
 } as const;
 
 const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const USDT_ERC20_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+const TRONGRID_API_KEY = "62267827-ed30-4652-960c-6ff5ba4aa608";
+const ETHERSCAN_API_KEY = "9C3GJWEDWZCSI6D3YJ617SAYN1XUP2NVCW";
 const MIN_DEPOSIT = 10;
 const MIN_FEE_TOPUP = 10;
 const WEEKLY_FEE = 3;
@@ -156,12 +158,11 @@ async function sendAddressPage(ctx: Context, network: Network, type: DepositType
 
 // ── Blockchain checkers ────────────────────────────────────────────────────────
 async function checkTRC20(p: PendingDeposit): Promise<{ found: boolean; txId?: string }> {
-  const apiKey = process.env.TRONGRID_API_KEY ?? "";
   const url =
     `https://api.trongrid.io/v1/accounts/${WALLET.TRC20.address}/transactions/trc20` +
     `?only_to=true&contract_address=${USDT_TRC20_CONTRACT}&min_timestamp=${p.timestamp}&limit=50`;
 
-  const res = await fetch(url, { headers: apiKey ? { "TRON-PRO-API-KEY": apiKey } : {} });
+  const res = await fetch(url, { headers: { "TRON-PRO-API-KEY": TRONGRID_API_KEY } });
   const data: any = await res.json();
   const txs: any[] = data?.data ?? [];
   const match = txs.find((tx) => Math.abs(parseInt(tx.value ?? "0") / 1_000_000 - p.amount) < 0.005);
@@ -169,13 +170,12 @@ async function checkTRC20(p: PendingDeposit): Promise<{ found: boolean; txId?: s
 }
 
 async function checkERC20(p: PendingDeposit): Promise<{ found: boolean; txId?: string }> {
-  const apiKey = process.env.ETHERSCAN_API_KEY ?? "";
   const startTs = Math.floor(p.timestamp / 1000);
   const url =
     `https://api.etherscan.io/api?module=account&action=tokentx` +
     `&address=${WALLET.ERC20.address}` +
     `&contractaddress=${USDT_ERC20_CONTRACT}` +
-    `&startblock=0&endblock=99999999&sort=desc&apikey=${apiKey}`;
+    `&startblock=0&endblock=99999999&sort=desc&apikey=${ETHERSCAN_API_KEY}`;
 
   const res = await fetch(url);
   const data: any = await res.json();
