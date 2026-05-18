@@ -130,7 +130,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   bot.on("message:text", handleAdminText);
   bot.on("channel_post:text", handleAdminText);
 
-  // ── ✅ Approve ────────────────────────────────────────────────────────────
+  // ── ✅ Approve ─────────────────────────────────────────────────────────────
   bot.callbackQuery(/^approve_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("⏳ Verifying...");
     const userId = parseInt(ctx.match[1], 10);
@@ -217,9 +217,16 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour MT4/MT5 account has been verified and *activated*.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
         `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. 📊`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("💰 Deposit More", "menu_deposit").row()
+            .text("🏠 Main Menu", "menu_main"),
+        }
       );
-    } catch (e) { console.error(`[approve] Failed to notify user ${userId}:`, e); }
+    } catch (e) {
+      console.error(`[approve] Failed to notify user ${userId}:`, e);
+    }
 
     await ctx.reply(
       `✅ <b>Account Activated &amp; Verified</b>\n\n` +
@@ -232,14 +239,17 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── ✅ Manual Override ────────────────────────────────────────────────────
+  // ── ✅ Manual Override ─────────────────────────────────────────────────────
   bot.callbackQuery(/^manual_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery("✅ Manual override applied");
     const userId = parseInt(ctx.match[1], 10);
     const pending = await getPending(userId);
 
     if (!pending) {
-      await ctx.reply(`⚠️ No pending submission for <code>${userId}</code>.`, { parse_mode: "HTML" });
+      await ctx.reply(
+        `⚠️ No pending submission for <code>${userId}</code>.`,
+        { parse_mode: "HTML" }
+      );
       return;
     }
 
@@ -267,9 +277,16 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour account has been manually reviewed and *activated* by our team.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
         `💰 Deposit: *$${pending.depositAmount}*\n\nOur team will manage your account from here. 📊`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💰 Deposit More", "menu_deposit").row().text("🏠 Main Menu", "menu_main") }
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("💰 Deposit More", "menu_deposit").row()
+            .text("🏠 Main Menu", "menu_main"),
+        }
       );
-    } catch (e) { console.error(`[manual] Failed to notify user ${userId}:`, e); }
+    } catch (e) {
+      console.error(`[manual] Failed to notify user ${userId}:`, e);
+    }
 
     await ctx.reply(
       `✅ <b>Manually Approved</b> (MetaAPI verification bypassed)\n\n` +
@@ -279,7 +296,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── ❌ Reject ─────────────────────────────────────────────────────────────
+  // ── ❌ Reject ──────────────────────────────────────────────────────────────
   bot.callbackQuery(/^reject_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -287,7 +304,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     if (!pending) {
       await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
-      await ctx.reply(`⚠️ No pending submission for <code>${userId}</code>.`, { parse_mode: "HTML" });
+      await ctx.reply(
+        `⚠️ No pending submission for <code>${userId}</code>.`,
+        { parse_mode: "HTML" }
+      );
       return;
     }
 
@@ -375,14 +395,24 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
           : "—";
 
+        const hasOverride = raw.adjustedBalance != null;
+        const currentBalance = hasOverride && raw.adjustedDate
+          ? (() => {
+              const adjDate = new Date(raw.adjustedDate);
+              const daysSince = Math.max(0, Math.floor((Date.now() - adjDate.getTime()) / 86_400_000));
+              return raw.adjustedBalance * Math.pow(1.03, daysSince);
+            })()
+          : (startDate ? raw.deposit * Math.pow(1.03, typeof daysActive === "number" ? daysActive : 0) : raw.deposit);
+
         await ctx.api.sendMessage(
           chatId,
           `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
           `🆔 <code>${userId}</code>\n` +
           `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
           `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
-          `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
-          `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+          `📥 Original Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+          (hasOverride ? `📌 Updated Balance: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
+          `💰 Current Balance: <b>${formatUSD(currentBalance)}</b>\n` +
           `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
           {
             parse_mode: "HTML",
@@ -395,7 +425,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         );
       } catch (e) {
         console.error(`[listaccounts] Error for key ${key}:`, e);
-        await ctx.api.sendMessage(chatId, `⚠️ Error loading account <code>${key}</code>: ${e}`, { parse_mode: "HTML" });
+        await ctx.api.sendMessage(chatId,
+          `⚠️ Error loading account <code>${key}</code>: ${e}`,
+          { parse_mode: "HTML" }
+        );
       }
     }
   });
@@ -436,8 +469,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `🆔 <code>${targetId}</code>\n` +
       `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
       `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
-      `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n` +
-      `💵 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+      `📥 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
       `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
       {
         parse_mode: "HTML",
@@ -516,7 +548,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     }
 
     await ctx.reply(
-      `✅ <b>Verification Complete</b>\n\n  ✅ Passed: ${passed}\n  ❌ Failed: ${failed}\n  ⏭ Skipped: ${skipped}\n\n` +
+      `✅ <b>Verification Complete</b>\n\n` +
+      `  ✅ Passed: ${passed}\n` +
+      `  ❌ Failed: ${failed}\n` +
+      `  ⏭ Skipped: ${skipped}\n\n` +
       `${failed > 0 ? "⚠️ Use /listaccounts to revoke flagged accounts." : "All accounts verified successfully."}`,
       { parse_mode: "HTML" }
     );
@@ -564,7 +599,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!isAdminChannel(ctx)) return;
     const adminChatId = ctx.chat!.id.toString();
     const pending = await r().get(`revoke_reason:${adminChatId}`);
-    if (!pending) { await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No revocation in progress.`); return; }
+    if (!pending) {
+      await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No revocation in progress.`);
+      return;
+    }
     await r().del(`revoke_reason:${adminChatId}`);
     await ctx.api.sendMessage(ctx.chat!.id, `✅ Revocation cancelled. The account remains active.`);
   });
@@ -574,7 +612,10 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     if (!isAdminChannel(ctx)) return;
     const adminChatId = ctx.chat!.id.toString();
     const pending = await r().get(`reject_reason:${adminChatId}`);
-    if (!pending) { await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No rejection in progress.`); return; }
+    if (!pending) {
+      await ctx.api.sendMessage(ctx.chat!.id, `ℹ️ No rejection in progress.`);
+      return;
+    }
     await r().del(`reject_reason:${adminChatId}`);
     await ctx.api.sendMessage(ctx.chat!.id, `✅ Rejection cancelled. The submission is still pending.`);
   });
@@ -622,29 +663,33 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       current += line;
     }
     if (current) chunks.push(current);
-    for (const chunk of chunks) await ctx.api.sendMessage(ctx.chat!.id, chunk, { parse_mode: "HTML" });
+    for (const chunk of chunks) {
+      await ctx.api.sendMessage(ctx.chat!.id, chunk, { parse_mode: "HTML" });
+    }
   });
 
-  // ── 💰 /updateaccount <userId> <deposit> <YYYY-MM-DD> ────────────────────
-  // Silent update — no message sent to user.
-  // Updates deposit + start date in Redis. All figures recalculate
-  // automatically next time the user opens /balance or Daily Log.
+  // ── 💰 /updateaccount <userId> <balance> <YYYY-MM-DD> ────────────────────
+  // Silently sets adjustedBalance + adjustedDate. Original deposit NEVER changes.
+  // Days before adjustedDate: daily log uses original deposit compound.
+  // Days from adjustedDate onward: compounds from adjustedBalance.
+  // No message sent to user.
   //
-  // Usage:  /updateaccount 123456789 5000 2026-05-01
+  // Usage: /updateaccount 123456789 5000 2026-05-01
   bot.command("updateaccount", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
     const parts = getCmdText(ctx).split(/\s+/);
     const targetId = parseInt(parts[1] ?? "", 10);
-    const newDeposit = parseFloat(parts[2] ?? "");
+    const newBalance = parseFloat(parts[2] ?? "");
     const startDateStr = parts[3] ?? "";
 
-    if (isNaN(targetId) || isNaN(newDeposit) || newDeposit <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
+    if (isNaN(targetId) || isNaN(newBalance) || newBalance <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
       await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ <b>Usage:</b> <code>/updateaccount &lt;userId&gt; &lt;deposit&gt; &lt;YYYY-MM-DD&gt;</code>\n\n` +
+        `⚠️ <b>Usage:</b> <code>/updateaccount &lt;userId&gt; &lt;balance&gt; &lt;YYYY-MM-DD&gt;</code>\n\n` +
         `<b>Example:</b> <code>/updateaccount 123456789 5000 2026-05-01</code>\n\n` +
-        `Sets deposit to $5,000 from 2026-05-01. No message sent to user.\n` +
-        `They see updated figures next time they open /balance.`,
+        `Sets a $5,000 base balance starting from 2026-05-01.\n` +
+        `Original deposit stays intact. No message sent to user.\n` +
+        `User sees updated figures next time they open /balance.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -653,43 +698,45 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
       await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ No active account found for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
+        `⚠️ No active account for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
-    const startDate = new Date(`${startDateStr}T00:00:00.000Z`);
-    const daysElapsed = Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 86_400_000));
-    const currentBalance = newDeposit * Math.pow(1.03, daysElapsed);
+    const adjDate = new Date(`${startDateStr}T00:00:00.000Z`);
+    const daysElapsed = Math.max(0, Math.floor((Date.now() - adjDate.getTime()) / 86_400_000));
+    const currentBalance = newBalance * Math.pow(1.03, daysElapsed);
     const dailyEarning = currentBalance * 0.03;
 
     await r().set(`acct:${targetId}`, {
       ...raw,
-      deposit: parseFloat(newDeposit.toFixed(2)),
-      startDate: startDate.toISOString(),
+      adjustedBalance: parseFloat(newBalance.toFixed(2)),
+      adjustedDate: adjDate.toISOString(),
     });
 
     await ctx.api.sendMessage(ctx.chat!.id,
       `✅ <b>Account Updated (Silent)</b>\n\n` +
       `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
       `🆔 <code>${targetId}</code>\n\n` +
-      `📥 Deposit:       <b>${formatUSD(newDeposit)}</b>\n` +
-      `📅 Start Date:    <b>${startDateStr}</b>\n` +
-      `📊 Day:           <b>${daysElapsed}</b>\n` +
-      `💰 Balance Now:   <b>${formatUSD(currentBalance)}</b>\n` +
-      `📈 Daily Earning: <b>+${formatUSD(dailyEarning)}</b>\n\n` +
+      `📥 Original Deposit:   <b>${formatUSD(raw.deposit)}</b>\n` +
+      `📌 Adjusted Balance:   <b>${formatUSD(newBalance)}</b>\n` +
+      `📅 Effective From:     <b>${startDateStr}</b>\n` +
+      `📊 Days since:         <b>${daysElapsed}</b>\n` +
+      `💰 Balance Now:        <b>${formatUSD(currentBalance)}</b>\n` +
+      `📈 Daily Earning:      <b>+${formatUSD(dailyEarning)}</b>\n\n` +
       `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
       { parse_mode: "HTML" }
     );
   });
 
   // ── 💰 /setbalance <userId> <targetBalance> ───────────────────────────────
-  // Silent update — no message sent to user.
-  // Sets exactly what balance the user sees today by back-calculating
-  // the deposit. Start date stays the same.
+  // Silently sets today's displayed balance to an exact amount.
+  // Stores adjustedBalance = targetBalance, adjustedDate = today.
+  // Original deposit and historical daily log stay unchanged.
+  // No message sent to user.
   //
-  // Usage:  /setbalance 123456789 8500
+  // Usage: /setbalance 123456789 8500
   bot.command("setbalance", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -702,7 +749,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         `⚠️ <b>Usage:</b> <code>/setbalance &lt;userId&gt; &lt;targetBalance&gt;</code>\n\n` +
         `<b>Example:</b> <code>/setbalance 123456789 8500</code>\n\n` +
         `Makes the user's balance show exactly $8,500 today.\n` +
-        `Start date stays the same — deposit is back-calculated. No message sent to user.`,
+        `Original deposit and daily log history stay unchanged.\n` +
+        `No message sent to user.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -711,34 +759,30 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
       await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ No active account found for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
+        `⚠️ No active account for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
-    const startDate = new Date(raw.startDate as string);
-    const daysElapsed = Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 86_400_000));
-
-    // balance = deposit × 1.03^days  →  deposit = balance / 1.03^days
-    const newDeposit = daysElapsed > 0
-      ? targetBalance / Math.pow(1.03, daysElapsed)
-      : targetBalance;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const adjDate = new Date(`${todayStr}T00:00:00.000Z`);
     const dailyEarning = targetBalance * 0.03;
 
     await r().set(`acct:${targetId}`, {
       ...raw,
-      deposit: parseFloat(newDeposit.toFixed(2)),
+      adjustedBalance: parseFloat(targetBalance.toFixed(2)),
+      adjustedDate: adjDate.toISOString(),
     });
 
     await ctx.api.sendMessage(ctx.chat!.id,
       `✅ <b>Balance Set (Silent)</b>\n\n` +
       `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
       `🆔 <code>${targetId}</code>\n\n` +
+      `📥 Original Deposit:  <b>${formatUSD(raw.deposit)}</b>\n` +
       `💰 Balance Now:       <b>${formatUSD(targetBalance)}</b>\n` +
       `📈 Daily Earning:     <b>+${formatUSD(dailyEarning)}</b>\n` +
-      `📅 Day:               <b>${daysElapsed}</b>\n` +
-      `📥 Effective Deposit: <b>${formatUSD(newDeposit)}</b>\n\n` +
+      `📅 Effective From:    <b>${todayStr}</b>\n\n` +
       `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
       { parse_mode: "HTML" }
     );
