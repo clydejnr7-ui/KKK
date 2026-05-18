@@ -1,6 +1,6 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
 import { getAllActiveUserIds } from "./balance";
-import { getFeeBalance } from "./deposit";
+import { getFeeBalance, setFeeBalance } from "./deposit";
 import { Redis } from "@upstash/redis";
 
 function r(): Redis {
@@ -114,7 +114,7 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
     );
   });
 
-  // /feecredit <userId> <amount>  — manually add to a user's fee wallet
+  // /feecredit <userId> <amount>  — add to a user's fee wallet
   bot.command("feecredit", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -127,7 +127,7 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
         ctx.chat!.id,
         `⚠️ <b>Usage:</b> <code>/feecredit &lt;userId&gt; &lt;amount&gt;</code>\n\n` +
         `Example: <code>/feecredit 7764271121 9</code>\n` +
-        `<i>This credits $9 USDT to the user's fee wallet (3 weeks).</i>`,
+        `<i>Credits $9 USDT to the user's fee wallet (3 weeks).</i>`,
         { parse_mode: "HTML" }
       );
       return;
@@ -136,10 +136,8 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
     const current = await getFeeBalance(userId);
     const newBal = parseFloat((current + amount).toFixed(2));
     await r().set(`fee_bal:${userId}`, newBal);
-
     const weeksCovered = Math.floor(newBal / 3);
 
-    // Notify the user
     try {
       await ctx.api.sendMessage(
         userId,
@@ -161,7 +159,7 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
           },
         }
       );
-    } catch { /* user may have blocked the bot */ }
+    } catch { }
 
     await ctx.api.sendMessage(
       ctx.chat!.id,
@@ -170,6 +168,68 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
       `💰 Credited: <b>+$${amount.toFixed(2)} USDT</b>\n` +
       `💼 New Fee Balance: <b>$${newBal.toFixed(2)}</b>\n` +
       `📅 Weeks Covered: <b>${weeksCovered}</b>`,
+      { parse_mode: "HTML" }
+    );
+  });
+
+  // /setfee <userId> <amount>  — set fee wallet to exact amount (overwrite)
+  bot.command("setfee", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const parts = (ctx.message?.text ?? (ctx as any).channelPost?.text ?? "").trim().split(/\s+/);
+    const userId = parseInt(parts[1] ?? "", 10);
+    const amount = parseFloat(parts[2] ?? "");
+
+    if (!userId || isNaN(userId) || isNaN(amount) || amount < 0) {
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
+        `⚠️ <b>Usage:</b> <code>/setfee &lt;userId&gt; &lt;amount&gt;</code>\n\n` +
+        `Example: <code>/setfee 7764271121 30</code>\n` +
+        `<i>Sets the fee wallet to exactly $30 USDT (overwrites current balance).</i>\n\n` +
+        `Use <code>/setfee &lt;userId&gt; 0</code> to zero out the fee wallet.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const oldBal = await getFeeBalance(userId);
+    const newBal = await setFeeBalance(userId, amount);
+    const weeksCovered = Math.floor(newBal / 3);
+    const diff = newBal - oldBal;
+    const diffSign = diff >= 0 ? "+" : "";
+
+    try {
+      await ctx.api.sendMessage(
+        userId,
+        `╔═══════════════════════════╗\n` +
+        `║  💼  FEE WALLET UPDATED    ║\n` +
+        `╚═══════════════════════════╝\n\n` +
+        `Your fee wallet has been updated by the Trading Flux team\\.\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💼 *New Fee Balance:* $${newBal.toFixed(2)}\n` +
+        `📅 *Weeks Covered:* ${weeksCovered}\n\n` +
+        `_Contact support if you have any questions\\._`,
+        {
+          parse_mode: "MarkdownV2",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💳 Pay Fee Now ($3)", callback_data: "menu_fee" }],
+              [{ text: "🏠 Main Menu", callback_data: "menu_main" }],
+            ],
+          },
+        }
+      );
+    } catch { }
+
+    await ctx.api.sendMessage(
+      ctx.chat!.id,
+      `✅ <b>Fee Wallet Set</b>\n\n` +
+      `👤 User: <code>${userId}</code>\n` +
+      `📊 Previous Balance: <b>$${oldBal.toFixed(2)}</b>\n` +
+      `💼 New Balance: <b>$${newBal.toFixed(2)}</b>\n` +
+      `📈 Change: <b>${diffSign}$${diff.toFixed(2)}</b>\n` +
+      `📅 Weeks Covered: <b>${weeksCovered}</b>\n\n` +
+      `<i>User has been notified.</i>`,
       { parse_mode: "HTML" }
     );
   });
