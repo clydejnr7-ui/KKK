@@ -24,11 +24,6 @@ export interface LiveBalance {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-/**
- * Effective start date for compounding:
- *   - If admin set adjustedBalance, compound starts from adjustedDate.
- *   - Otherwise compound starts from the original startDate.
- */
 function getEffectiveStart(data: AccountData): Date {
   if (data.adjustedBalance != null && data.adjustedDate) {
     return data.adjustedDate instanceof Date
@@ -40,21 +35,10 @@ function getEffectiveStart(data: AccountData): Date {
     : new Date(data.startDate as unknown as string);
 }
 
-/**
- * Profit base:
- *   - If admin set adjustedBalance, that IS the new principal.
- *   - Otherwise use the original deposit.
- *
- * Example: deposit=$700, adjustedBalance=$1000 → base=$1000.
- * Net profit shown = currentBalance - $1000 (gains since last update).
- * The $300 gap from deposit to adjustedBalance is already reflected in the
- * overview's "Original Deposit vs Base Balance" lines.
- */
 function getProfitBase(data: AccountData): number {
   return data.adjustedBalance ?? data.deposit;
 }
 
-/** Fraction of today elapsed, based on real clock time (0–1). */
 function todayFraction(now: Date): number {
   return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
 }
@@ -72,12 +56,6 @@ export function computeCurrentBalance(data: AccountData, now = new Date()): numb
   return base * Math.pow(1.03, daysElapsed);
 }
 
-/**
- * Profit earned on day `dayNum` (1-indexed from effectiveStart).
- *   Day 1 profit = base * 0.03
- *   Day 2 profit = base * 1.03 * 0.03
- *   Day N profit = base * 1.03^(N-1) * 0.03
- */
 export function getDayProfit(data: AccountData, dayNum: number): number {
   const base = getProfitBase(data);
   return base * Math.pow(1.03, dayNum - 1) * 0.03;
@@ -118,13 +96,13 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
 
   const currentBalance = live ? live.balance : computeCurrentBalance(data, now);
 
-  // Net profit = gains compounding from profitBase (not from original deposit)
-  const totalProfit = currentBalance - profitBase;
-  const growthPct = profitBase > 0 ? (totalProfit / profitBase) * 100 : 0;
+  // Profit always shown vs original deposit — so admin bumps are visible
+  const totalProfit = currentBalance - data.deposit;
+  const growthPct = data.deposit > 0 ? (totalProfit / data.deposit) * 100 : 0;
 
   const nextMilestone = Math.ceil(currentBalance / 1000) * 1000;
   const healthScore = Math.min(100, 50 + daysElapsed * 2);
-  const growthBar = progressBar(Math.min(growthPct, 100));
+  const growthBar = progressBar(Math.min(Math.abs(growthPct), 100));
 
   const isFirstDay = daysElapsed === 0;
   const todayDailyEarning = currentBalance * 0.03;
@@ -176,7 +154,6 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
 
   const hasAdjustment = data.adjustedBalance != null;
 
-  // Show original deposit + updated base (if set) so user sees both
   const depositLines = hasAdjustment
     ? `📥 Original Deposit  ${formatUSD(data.deposit)}\n` +
       `📌 Updated Base      ${formatUSD(data.adjustedBalance!)}\n`
@@ -263,20 +240,18 @@ export function buildDailyLogTab(data: AccountData): string {
   const currentBalance = computeCurrentBalance(data, now);
   const todayDailyEarning = currentBalance * 0.03;
 
-  // Use real clock fraction — not startDate-relative math
   const dayFrac = todayFraction(now);
   const earnedToday = todayDailyEarning * dayFrac;
   const remainingToday = todayDailyEarning - earnedToday;
 
-  // Total earned = gains compounding from profitBase (matches daily row sum)
-  const totalEarned = currentBalance - profitBase;
+  // Total earned = total profit from original deposit (includes admin bumps)
+  const totalEarned = currentBalance - data.deposit;
 
   const rows: string[] = [];
   const showDays = Math.min(daysElapsed, 7);
 
   for (let i = showDays; i >= 1; i--) {
     const dayNum = daysElapsed - i + 1;
-    // getDayProfit uses profitBase * 1.03^(dayNum-1) * 0.03
     const profit = getDayProfit(data, dayNum);
     const date = new Date(effectiveStart.getTime() + (dayNum - 1) * msPerDay);
     const label = date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
