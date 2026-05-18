@@ -29,6 +29,7 @@ async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> 
 
   const adminChatId = ctx.chat!.id.toString();
 
+  // ── Revoke reason flow ────────────────────────────────────────────────────
   const revokeTargetRaw = await r().get(`revoke_reason:${adminChatId}`);
   if (revokeTargetRaw !== null) {
     const revokeTargetId = Number(revokeTargetRaw);
@@ -78,6 +79,7 @@ async function handleAdminText(ctx: Context, next: NextFunction): Promise<void> 
     return;
   }
 
+  // ── Reject reason flow ────────────────────────────────────────────────────
   const pendingUserRaw = await r().get(`reject_reason:${adminChatId}`);
   if (pendingUserRaw === null) { await next(); return; }
 
@@ -212,7 +214,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     try {
-      await ctx.api.sendMessage(userId,
+      await ctx.api.sendMessage(
+        userId,
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour MT4/MT5 account has been verified and *activated*.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
@@ -220,6 +223,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
+            .text("📊 View Dashboard", "menu_balance").row()
             .text("💰 Deposit More", "menu_deposit").row()
             .text("🏠 Main Menu", "menu_main"),
         }
@@ -232,7 +236,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `✅ <b>Account Activated &amp; Verified</b>\n\n` +
       `👤 <b>${pending.fullName ?? "Trader"}</b>\n` +
       `🆔 User ID: <code>${userId}</code>\n` +
-      `💵 Deposit: <b>$${pending.depositAmount}</b>\n` +
+      `💵 Deposit: <b>${formatUSD(deposit)}</b>\n` +
       `📅 Start: ${pending.startDate}\n` +
       `🖥 ${pending.platform} — ${pending.brokerName}\n\nUser has been notified.`,
       { parse_mode: "HTML" }
@@ -272,7 +276,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
 
     try {
-      await ctx.api.sendMessage(userId,
+      await ctx.api.sendMessage(
+        userId,
         `╔═══════════════════════════╗\n║  ✅  ACCOUNT APPROVED!     ║\n╚═══════════════════════════╝\n\n` +
         `🎉 Congratulations, *${pending.fullName}*!\n\nYour account has been manually reviewed and *activated* by our team.\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 *Your Account*\n   Platform: *${pending.platform}*\n   Broker: *${pending.brokerName}*\n   Server: \`${pending.serverName}\`\n\n` +
@@ -280,6 +285,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
+            .text("📊 View Dashboard", "menu_balance").row()
             .text("💰 Deposit More", "menu_deposit").row()
             .text("🏠 Main Menu", "menu_main"),
         }
@@ -291,7 +297,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     await ctx.reply(
       `✅ <b>Manually Approved</b> (MetaAPI verification bypassed)\n\n` +
       `👤 <b>${pending.fullName}</b>\n🆔 <code>${userId}</code>\n` +
-      `💵 $${pending.depositAmount} — ${pending.platform} ${pending.brokerName}\n\nUser has been notified.`,
+      `💵 ${formatUSD(deposit)} — ${pending.platform} ${pending.brokerName}\n\nUser has been notified.`,
       { parse_mode: "HTML" }
     );
   });
@@ -329,7 +335,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 🔑 Revoke (button clicked) ────────────────────────────────────────────
+  // ── 🔑 Revoke ──────────────────────────────────────────────────────────────
   bot.callbackQuery(/^revoke_(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = parseInt(ctx.match[1], 10);
@@ -367,7 +373,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const keys = await r().keys("acct:*");
 
     if (!keys || keys.length === 0) {
-      await ctx.api.sendMessage(chatId,
+      await ctx.api.sendMessage(
+        chatId,
         `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
         `ℹ️ No approved accounts found.\n\n<i>Run /debugredis to inspect all Redis keys.</i>`,
         { parse_mode: "HTML" }
@@ -375,7 +382,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       return;
     }
 
-    await ctx.api.sendMessage(chatId,
+    await ctx.api.sendMessage(
+      chatId,
       `╔═══════════════════════════╗\n║  📋  ACTIVE ACCOUNTS       ║\n╚═══════════════════════════╝\n\n` +
       `<b>${keys.length} approved account${keys.length !== 1 ? "s" : ""}</b>\n\n` +
       `Each card below has a 🔑 Revoke button. Tap it, then type a reason.`,
@@ -390,225 +398,49 @@ export function registerApproveHandler(bot: Bot<Context>): void {
         const userId = Number(key.replace("acct:", ""));
         await r().sadd("active_accounts", userId);
 
-        const startDate = raw.startDate ? new Date(raw.startDate) : null;
+        const startDate = raw.startDate ? new Date(raw.startDate as string) : null;
         const daysActive = startDate
           ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
           : "—";
 
-        // Use computeCurrentBalance to correctly honour adjustedBalance + adjustedDate
+        // Use computeCurrentBalance so adjustedBalance is respected
         const accountData = {
-          deposit: raw.deposit ?? 0,
+          ...raw,
           startDate: startDate ?? new Date(),
-          adjustedBalance: raw.adjustedBalance ?? undefined,
-          adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate) : undefined,
-          fullName: raw.fullName ?? "",
+          adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate as string) : undefined,
         };
         const currentBalance = computeCurrentBalance(accountData);
-
-        // Profit base mirrors what the user sees
-        const profitBase = raw.adjustedBalance != null ? raw.adjustedBalance : (raw.deposit ?? 0);
+        const profitBase: number = raw.adjustedBalance ?? raw.deposit ?? 0;
         const profit = currentBalance - profitBase;
+        const dailyEarning = currentBalance * 0.03;
 
         await ctx.api.sendMessage(
           chatId,
-          `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+          `┌─────────────────────────┐\n` +
+          `│  👤  ${(raw.fullName ?? "Unknown").slice(0, 20).padEnd(20)}│\n` +
+          `└─────────────────────────┘\n\n` +
           `🆔 <code>${userId}</code>\n` +
-          `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
+          `🖥 <b>${raw.platform ?? "—"}</b> — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
           `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
-          `📥 Original Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
-          (raw.adjustedBalance != null ? `📌 Updated Balance: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
-          `💰 Current Balance: <b>${formatUSD(currentBalance)}</b>\n` +
-          `📈 Profit (since update): <b>+${formatUSD(profit)}</b>\n` +
-          `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
+          `🔑 Login: <code>${raw.accountNumber ?? "—"}</code>\n\n` +
+          `💵 Deposit:  <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+          (raw.adjustedBalance != null
+            ? `📌 Base:     <b>${formatUSD(raw.adjustedBalance)}</b>\n`
+            : ``) +
+          `💰 Balance:  <b>${formatUSD(currentBalance)}</b>\n` +
+          `📈 Profit:   <b>+${formatUSD(profit)}</b>\n` +
+          `📅 Daily:    <b>+${formatUSD(dailyEarning)}</b>\n` +
+          `🗓 Day ${daysActive} active\n`,
           {
             parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [[
-                { text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }
-              ]]
-            }
+            reply_markup: new InlineKeyboard()
+              .text("🔑 Revoke Account", `revoke_${userId}`),
           }
         );
       } catch (e) {
         console.error(`[listaccounts] Error for key ${key}:`, e);
-        await ctx.api.sendMessage(chatId,
-          `⚠️ Error loading account <code>${key}</code>: ${e}`,
-          { parse_mode: "HTML" }
-        );
       }
     }
-  });
-
-  // ── 🔧 /fixbutton <userId> ────────────────────────────────────────────────
-  bot.command("fixbutton", async (ctx) => {
-    if (!isAdminChannel(ctx)) return;
-
-    const parts = getCmdText(ctx).split(/\s+/);
-    const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
-
-    if (isNaN(targetId)) {
-      await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ <b>Usage:</b> <code>/fixbutton &lt;userId&gt;</code>\n\nExample: <code>/fixbutton 7764271121</code>`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    const raw = await r().get<any>(`acct:${targetId}`);
-    if (!raw) {
-      await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ No active account found for user <code>${targetId}</code>.`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    const startDate = raw.startDate ? new Date(raw.startDate) : null;
-    const daysActive = startDate
-      ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
-      : "—";
-
-    const accountData = {
-      deposit: raw.deposit ?? 0,
-      startDate: startDate ?? new Date(),
-      adjustedBalance: raw.adjustedBalance ?? undefined,
-      adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate) : undefined,
-      fullName: raw.fullName ?? "",
-    };
-    const currentBalance = computeCurrentBalance(accountData);
-
-    await ctx.api.sendMessage(
-      ctx.chat!.id,
-      `✅ <b>Approved Account</b>\n\n` +
-      `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
-      `🆔 <code>${targetId}</code>\n` +
-      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
-      `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
-      `📥 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
-      (raw.adjustedBalance != null ? `📌 Updated: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
-      `💰 Current: <b>${formatUSD(currentBalance)}</b>\n` +
-      `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [[
-            { text: "🔑 Revoke Account", callback_data: `revoke_${targetId}` }
-          ]]
-        }
-      }
-    );
-  });
-
-  // ── 🔍 /verifyaccounts ────────────────────────────────────────────────────
-  bot.command("verifyaccounts", async (ctx) => {
-    if (!isAdminChannel(ctx)) return;
-
-    const keys = await r().keys("acct:*");
-    if (!keys || keys.length === 0) {
-      await ctx.reply(`ℹ️ <b>No active accounts found.</b>`, { parse_mode: "HTML" });
-      return;
-    }
-
-    await ctx.reply(
-      `🔍 <b>Verifying ${keys.length} account${keys.length !== 1 ? "s" : ""}...</b>\n\n⏳ Please wait...`,
-      { parse_mode: "HTML" }
-    );
-
-    let passed = 0, failed = 0, skipped = 0;
-
-    for (const key of keys) {
-      const raw = await r().get<any>(key);
-      if (!raw) { skipped++; continue; }
-      const userId = Number(key.replace("acct:", ""));
-      await r().sadd("active_accounts", userId);
-
-      if (!raw.accountNumber || !raw.serverName || !raw.platform || (!raw.investorPassword && !raw.password)) {
-        skipped++; continue;
-      }
-
-      const result = await connectAndValidate({
-        userId,
-        accountNumber: raw.accountNumber,
-        password: raw.password ?? raw.investorPassword ?? "",
-        investorPassword: raw.investorPassword,
-        serverName: raw.serverName,
-        platform: raw.platform as "MT4" | "MT5",
-      });
-
-      if (result.success) {
-        passed++;
-      } else {
-        failed++;
-        const isPasswordError =
-          result.error?.toLowerCase().includes("invalid credentials") ||
-          result.error?.toLowerCase().includes("invalid login") ||
-          result.error?.toLowerCase().includes("wrong password") ||
-          result.error?.toLowerCase().includes("notauthenticated");
-
-        await ctx.reply(
-          `🔑 <b>${isPasswordError ? "Password Changed" : "Verification Failed"}</b>\n\n` +
-          `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
-          `🆔 <code>${userId}</code>\n` +
-          `🖥 ${raw.platform} — ${raw.brokerName ?? raw.broker ?? "—"}\n\n` +
-          `<b>Error:</b> ${result.error}`,
-          {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🔑 Revoke Account", callback_data: `revoke_${userId}` }],
-                [{ text: "🔁 Skip for Now", callback_data: "noop" }]
-              ]
-            }
-          }
-        );
-      }
-    }
-
-    await ctx.reply(
-      `✅ <b>Verification Complete</b>\n\n` +
-      `  ✅ Passed: ${passed}\n` +
-      `  ❌ Failed: ${failed}\n` +
-      `  ⏭ Skipped: ${skipped}\n\n` +
-      `${failed > 0 ? "⚠️ Use /listaccounts to revoke flagged accounts." : "All accounts verified successfully."}`,
-      { parse_mode: "HTML" }
-    );
-  });
-
-  // ── 🔑 /revokeaccount <userId> ────────────────────────────────────────────
-  bot.command("revokeaccount", async (ctx) => {
-    if (!isAdminChannel(ctx)) return;
-
-    const parts = getCmdText(ctx).split(/\s+/);
-    const targetId = parts[1] ? parseInt(parts[1], 10) : NaN;
-
-    if (isNaN(targetId)) {
-      await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ <b>Usage:</b> <code>/revokeaccount &lt;userId&gt;</code>\n\nExample: <code>/revokeaccount 7764271121</code>\n\nTip: Use /listaccounts for button-based revocation.`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    const raw = await r().get<any>(`acct:${targetId}`);
-    if (!raw) {
-      await ctx.api.sendMessage(ctx.chat!.id,
-        `⚠️ No active account found for user <code>${targetId}</code>.`,
-        { parse_mode: "HTML" }
-      );
-      return;
-    }
-
-    const adminChatId = ctx.chat!.id.toString();
-    await r().set(`revoke_reason:${adminChatId}`, targetId, { ex: 300 });
-
-    await ctx.api.sendMessage(ctx.chat!.id,
-      `✍️ <b>Manual Revocation</b>\n\n` +
-      `You are revoking:\n👤 <b>${raw.fullName ?? "Unknown"}</b> (ID: <code>${targetId}</code>)\n` +
-      `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n\n` +
-      `Please type the <b>reason</b> to send to the user.\n\n` +
-      `<i>You have 5 minutes. Send /cancel_revoke to abort.</i>`,
-      { parse_mode: "HTML" }
-    );
   });
 
   // ── /cancel_revoke ────────────────────────────────────────────────────────
@@ -637,20 +469,22 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     await ctx.api.sendMessage(ctx.chat!.id, `✅ Rejection cancelled. The submission is still pending.`);
   });
 
-  // ── 🔧 /testbutton ────────────────────────────────────────────────────────
+  // ── /testbutton ────────────────────────────────────────────────────────────
   bot.command("testbutton", async (ctx) => {
     const chatId = ctx.chat!.id;
     const adminChannelId = process.env.ADMIN_CHANNEL_ID ?? "NOT SET";
 
     if (!isAdminChannel(ctx)) {
-      await ctx.api.sendMessage(chatId,
+      await ctx.api.sendMessage(
+        chatId,
         `❌ <b>isAdminChannel = FALSE</b>\n\nChat ID: <code>${chatId}</code>\nADMIN_CHANNEL_ID env: <code>${adminChannelId}</code>\n\nThese must match exactly.`,
         { parse_mode: "HTML" }
       );
       return;
     }
 
-    await ctx.api.sendMessage(chatId,
+    await ctx.api.sendMessage(
+      chatId,
       `✅ <b>isAdminChannel = TRUE</b>\n\nChat ID: <code>${chatId}</code>\n\nSending button test...`,
       { parse_mode: "HTML" }
     );
@@ -664,7 +498,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     });
   });
 
-  // ── 🔧 /debugredis ────────────────────────────────────────────────────────
+  // ── /debugredis ────────────────────────────────────────────────────────────
   bot.command("debugredis", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
     const allKeys = await r().keys("*");
@@ -685,7 +519,11 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     }
   });
 
-  // ── 💰 /updateaccount <userId> <balance> <YYYY-MM-DD> ────────────────────
+  // ── /updateaccount <userId> <balance> <YYYY-MM-DD> ────────────────────────
+  // Sets adjustedBalance + adjustedDate. Original deposit NEVER changes.
+  // Days before adjustedDate: daily log uses original deposit compound.
+  // Days from adjustedDate onward: compounds from adjustedBalance.
+  // No message sent to user.
   bot.command("updateaccount", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -695,12 +533,12 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const startDateStr = parts[3] ?? "";
 
     if (isNaN(targetId) || isNaN(newBalance) || newBalance <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
-      await ctx.api.sendMessage(ctx.chat!.id,
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
         `⚠️ <b>Usage:</b> <code>/updateaccount &lt;userId&gt; &lt;balance&gt; &lt;YYYY-MM-DD&gt;</code>\n\n` +
-        `<b>Example:</b> <code>/updateaccount 123456789 5000 2026-05-01</code>\n\n` +
-        `Sets a $5,000 base balance starting from 2026-05-01.\n` +
-        `Original deposit stays intact. No message sent to user.\n` +
-        `User sees updated figures next time they open /balance.`,
+        `<b>Example:</b> <code>/updateaccount 123456789 1000 2026-05-18</code>\n\n` +
+        `Sets $1,000 as the new compounding base from 2026-05-18.\n` +
+        `Original deposit stays intact. No message sent to user.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -708,7 +546,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
-      await ctx.api.sendMessage(ctx.chat!.id,
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
         `⚠️ No active account for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
         { parse_mode: "HTML" }
       );
@@ -719,6 +558,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const daysElapsed = Math.max(0, Math.floor((Date.now() - adjDate.getTime()) / 86_400_000));
     const currentBalance = newBalance * Math.pow(1.03, daysElapsed);
     const dailyEarning = currentBalance * 0.03;
+    const profit = currentBalance - newBalance;
 
     await r().set(`acct:${targetId}`, {
       ...raw,
@@ -726,22 +566,27 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       adjustedDate: adjDate.toISOString(),
     });
 
-    await ctx.api.sendMessage(ctx.chat!.id,
+    await ctx.api.sendMessage(
+      ctx.chat!.id,
       `✅ <b>Account Updated (Silent)</b>\n\n` +
       `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
       `🆔 <code>${targetId}</code>\n\n` +
-      `📥 Original Deposit:   <b>${formatUSD(raw.deposit)}</b>\n` +
-      `📌 Adjusted Balance:   <b>${formatUSD(newBalance)}</b>\n` +
-      `📅 Effective From:     <b>${startDateStr}</b>\n` +
-      `📊 Days since:         <b>${daysElapsed}</b>\n` +
-      `💰 Balance Now:        <b>${formatUSD(currentBalance)}</b>\n` +
-      `📈 Daily Earning:      <b>+${formatUSD(dailyEarning)}</b>\n\n` +
-      `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
+      `📥 Original Deposit:  <b>${formatUSD(raw.deposit)}</b>\n` +
+      `📌 New Base Balance:  <b>${formatUSD(newBalance)}</b>\n` +
+      `📅 Effective From:    <b>${startDateStr}</b>\n` +
+      `📊 Days compounding:  <b>${daysElapsed}</b>\n` +
+      `💰 Balance Now:       <b>${formatUSD(currentBalance)}</b>\n` +
+      `📈 Profit since base: <b>+${formatUSD(profit)}</b>\n` +
+      `📅 Daily Earning:     <b>+${formatUSD(dailyEarning)}</b>\n\n` +
+      `<i>No message sent to user. New figures appear next time they open /balance.</i>`,
       { parse_mode: "HTML" }
     );
   });
 
-  // ── 💰 /setbalance <userId> <targetBalance> ───────────────────────────────
+  // ── /setbalance <userId> <targetBalance> ──────────────────────────────────
+  // Silently sets today's displayed balance to an exact amount.
+  // Stores adjustedBalance = targetBalance, adjustedDate = today.
+  // No message sent to user.
   bot.command("setbalance", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -750,12 +595,12 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     const targetBalance = parseFloat(parts[2] ?? "");
 
     if (isNaN(targetId) || isNaN(targetBalance) || targetBalance <= 0) {
-      await ctx.api.sendMessage(ctx.chat!.id,
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
         `⚠️ <b>Usage:</b> <code>/setbalance &lt;userId&gt; &lt;targetBalance&gt;</code>\n\n` +
-        `<b>Example:</b> <code>/setbalance 123456789 8500</code>\n\n` +
-        `Makes the user's balance show exactly $8,500 today.\n` +
-        `Original deposit and daily log history stay unchanged.\n` +
-        `No message sent to user.`,
+        `<b>Example:</b> <code>/setbalance 123456789 1000</code>\n\n` +
+        `Makes the user's balance show exactly $1,000 today.\n` +
+        `Original deposit stays unchanged. No message sent to user.`,
         { parse_mode: "HTML" }
       );
       return;
@@ -763,7 +608,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
 
     const raw = await r().get<any>(`acct:${targetId}`);
     if (!raw) {
-      await ctx.api.sendMessage(ctx.chat!.id,
+      await ctx.api.sendMessage(
+        ctx.chat!.id,
         `⚠️ No active account for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
         { parse_mode: "HTML" }
       );
@@ -780,20 +626,21 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       adjustedDate: adjDate.toISOString(),
     });
 
-    await ctx.api.sendMessage(ctx.chat!.id,
+    await ctx.api.sendMessage(
+      ctx.chat!.id,
       `✅ <b>Balance Set (Silent)</b>\n\n` +
       `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
       `🆔 <code>${targetId}</code>\n\n` +
       `📥 Original Deposit:  <b>${formatUSD(raw.deposit)}</b>\n` +
       `💰 Balance Now:       <b>${formatUSD(targetBalance)}</b>\n` +
       `📈 Daily Earning:     <b>+${formatUSD(dailyEarning)}</b>\n` +
-      `📅 Effective From:    <b>${todayStr}</b>\n\n` +
-      `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
+      `📅 Effective From:    <b>${todayStr} (today)</b>\n\n` +
+      `<i>No message sent to user. New figures appear next time they open /balance.</i>`,
       { parse_mode: "HTML" }
     );
   });
 
-  // ── Noop ──────────────────────────────────────────────────────────────────
+  // ── Noop ───────────────────────────────────────────────────────────────────
   bot.callbackQuery("noop", async (ctx) => {
     await ctx.answerCallbackQuery();
   });
