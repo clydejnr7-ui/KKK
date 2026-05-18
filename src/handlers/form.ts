@@ -26,7 +26,7 @@ async function getAccountData(userId: number): Promise<AccountData | null> {
   };
 }
 
-/** Effective start date for a user — adjustedDate if set, else startDate */
+/** Effective start date — adjustedDate if set, else startDate */
 function effectiveStart(account: AccountData): Date {
   if (account.adjustedBalance != null && account.adjustedDate) {
     return account.adjustedDate instanceof Date
@@ -34,11 +34,6 @@ function effectiveStart(account: AccountData): Date {
       : new Date(account.adjustedDate as unknown as string);
   }
   return account.startDate;
-}
-
-/** Profit base — adjustedBalance if set, else original deposit */
-function profitBase(account: AccountData): number {
-  return account.adjustedBalance ?? account.deposit;
 }
 
 /** Fraction of today elapsed based on real clock (0–1) */
@@ -85,10 +80,9 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
       const now = new Date();
       const currentBalance = computeCurrentBalance(account, now);
       const todayDailyEarning = currentBalance * 0.03;
-      // Use real seconds-based fraction, consistent with balance dashboard
       const earnedToday = todayDailyEarning * todayFraction(now);
-      const base = profitBase(account);
-      const totalProfit = currentBalance - base;
+      // Profit always vs original deposit — reflects full gain including admin bumps
+      const totalProfit = currentBalance - account.deposit;
 
       balanceLine =
         `\n┌─────────────────────────┐\n` +
@@ -218,22 +212,18 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       const now = new Date();
       const msPerDay = 86_400_000;
 
-      // Count days from adjustedDate when set — consistent with the balance dashboard
+      // Day counter from effective start (adjustedDate if set)
       const start = effectiveStart(account);
       const daysElapsed = Math.max(0, Math.floor((now.getTime() - start.getTime()) / msPerDay));
 
       const currentBalance = computeCurrentBalance(account, now);
-      const base = profitBase(account);
-      const totalProfit = currentBalance - base;
-      const growthPct = base > 0 ? (totalProfit / base) * 100 : 0;
+
+      // Profit always vs original deposit — reflects full gain including admin bumps
+      const totalProfit = currentBalance - account.deposit;
+      const growthPct = account.deposit > 0 ? (totalProfit / account.deposit) * 100 : 0;
 
       const todayDailyEarning = currentBalance * 0.03;
-      // Use real seconds-based fraction — consistent with balance dashboard
       const earnedToday = todayDailyEarning * todayFraction(now);
-
-      const profitLabel = account.adjustedBalance != null
-        ? `  📈 Profit Since Update: `
-        : `  📈 Total Profit:        `;
 
       const activeLabel = account.adjustedBalance != null
         ? `Day *${daysElapsed}* since last update  ·  +3%/day`
@@ -248,7 +238,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         (account.adjustedBalance != null
           ? `  📌 Updated Base:     *${formatUSD(account.adjustedBalance)}*\n`
           : ``) +
-        `${profitLabel}*+${formatUSD(totalProfit)}*\n` +
+        `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
         `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n` +
         `  ✅ Earned today:     *+${formatUSD(earnedToday)}*\n\n` +
         `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 ${activeLabel}`,
