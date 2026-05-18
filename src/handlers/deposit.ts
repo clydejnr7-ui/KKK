@@ -1,6 +1,6 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
 import { Redis } from "@upstash/redis";
-import { computeBalance } from "../utils/balance";
+import { computeBalance, computeCurrentBalance } from "../utils/balance";
 
 const WALLET = {
   TRC20: {
@@ -233,22 +233,32 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     return;
   }
 
-  // Trading account deposit
+  // ── Trading account deposit ───────────────────────────────────────────────
+  // We add the deposited amount on top of whatever the account shows RIGHT NOW
+  // (respecting adjustedBalance if set), then store that as the new adjustedBalance
+  // so profit tracking stays correct going forward.
   const account = await redis.get<any>(`acct:${pending.userId}`);
-  let newDeposit: number;
+  let newBalance: number;
 
   if (account) {
-    const startDate = new Date(account.startDate as string);
-    const daysElapsed = Math.max(0, Math.floor((now.getTime() - startDate.getTime()) / 86_400_000));
-    const currentBalance = computeBalance(account.deposit, daysElapsed);
-    newDeposit = parseFloat((currentBalance + pending.amount).toFixed(2));
+    // Compute true current balance (honours adjustedBalance if present)
+    const accountData = {
+      ...account,
+      startDate: new Date(account.startDate as string),
+      adjustedDate: account.adjustedDate ? new Date(account.adjustedDate as string) : undefined,
+      adjustedBalance: account.adjustedBalance ?? undefined,
+    };
+    const currentBalance = computeCurrentBalance(accountData, now);
+    newBalance = parseFloat((currentBalance + pending.amount).toFixed(2));
+
+    // Store as adjustedBalance from today so the profit base resets correctly
     await redis.set(`acct:${pending.userId}`, {
       ...account,
-      deposit: newDeposit,
-      startDate: now.toISOString(),
+      adjustedBalance: newBalance,
+      adjustedDate: now.toISOString(),
     });
   } else {
-    newDeposit = pending.amount;
+    newBalance = pending.amount;
   }
 
   try {
@@ -258,7 +268,7 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
       `👤 User ID: <code>${pending.userId}</code>\n` +
       `🌐 Network: <b>${pending.network}</b>\n` +
       `💵 Amount: <b>${pending.amount.toFixed(2)} USDT</b>\n` +
-      `💼 New Principal: <b>$${newDeposit.toFixed(2)}</b>\n` +
+      `💼 New Balance: <b>$${newBalance.toFixed(2)}</b>\n` +
       `🔗 TX: <code>${txId}</code>`,
       { parse_mode: "HTML" }
     );
@@ -270,8 +280,8 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     `╚═══════════════════════════╝\n\n` +
     `🎉 *${pending.amount.toFixed(2)} USDT* has been credited!\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *New Balance:* $${newDeposit.toFixed(2)}\n` +
-    `📅 Compounding restarted from today\n` +
+    `💰 *New Balance:* $${newBalance.toFixed(2)}\n` +
+    `📅 Compounding continues from today\n` +
     `📈 Rate: *+3% / day*\n\n` +
     `🔗 TX: \`${txId}\``,
     {
