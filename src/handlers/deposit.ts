@@ -8,21 +8,19 @@ const WALLET = {
     label: "USDT TRC20",
     network: "TRON (TRC20)",
     qrUrl: "https://i.8upload.com/image/0ecb47f67b15073b/download-2.png",
-    fee: "~1 USDT",
   },
   ERC20: {
     address: "0xc2839F2Dd23B42C227DD91664fD0479659fC4610",
     label: "USDT ERC20",
     network: "Ethereum (ERC20)",
     qrUrl: "https://i.8upload.com/image/21fc625d9d174723/download-3.png",
-    fee: "~5–15 USD gas",
   },
 } as const;
 
 const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const USDT_ERC20_CONTRACT = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
 const MIN_DEPOSIT = 10;
-const MIN_FEE_TOPUP = 3;
+const MIN_FEE_TOPUP = 10;
 const WEEKLY_FEE = 3;
 
 type Network = "TRC20" | "ERC20";
@@ -54,7 +52,7 @@ async function deductFeeBalance(userId: number): Promise<number> {
   return newBal;
 }
 
-// ── Redis state ───────────────────────────────────────────────────────────────
+// ── Redis state ────────────────────────────────────────────────────────────────
 interface DepositStep {
   network: Network;
   type: DepositType;
@@ -93,7 +91,7 @@ function uniqueAmount(base: number): number {
   return parseFloat((base + cents / 100).toFixed(2));
 }
 
-// ── Keyboards ─────────────────────────────────────────────────────────────────
+// ── Keyboards ──────────────────────────────────────────────────────────────────
 function networkKeyboard(type: DepositType) {
   return new InlineKeyboard()
     .text("USDT TRC20", `dep_net_TRC20_${type}`).row()
@@ -108,7 +106,7 @@ function addressKeyboard(network: Network, type: DepositType) {
     .text("🔙 Choose Network", type === "deposit" ? "menu_deposit" : "menu_fee_topup");
 }
 
-// ── Shared senders ────────────────────────────────────────────────────────────
+// ── Shared senders ─────────────────────────────────────────────────────────────
 async function sendDepositMenu(ctx: Context, type: DepositType, edit = false) {
   const isDeposit = type === "deposit";
   const text =
@@ -116,13 +114,12 @@ async function sendDepositMenu(ctx: Context, type: DepositType, edit = false) {
     `│  💰 ${isDeposit ? "DEPOSIT FUNDS         " : "TOP UP FEE WALLET     "}│\n` +
     `└─────────────────────────┘\n\n` +
     (isDeposit
-      ? `Add funds to your Trading Flux account.\n\n📌 Minimum deposit: *$${MIN_DEPOSIT} USD*\n`
+      ? `Add funds to your Trading Flux account.\n\n📌 Minimum deposit: *$${MIN_DEPOSIT} USDT*\n`
       : `Add USDT to your fee wallet to cover weekly management fees.\n\n📌 Minimum top-up: *$${MIN_FEE_TOPUP} USDT*\n💡 Each week costs *$${WEEKLY_FEE} USDT*\n`) +
     `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🌐 Select your preferred network:\n\n` +
-    `  💜 *TRC20*\n` +
-    `  🔵 *ERC20*\n\n` +
-    `_💡 TRC20 is recommended for most users._`;
+    `  💜 *TRC20* — Recommended\n` +
+    `  🔵 *ERC20*\n`;
 
   const opts = { parse_mode: "Markdown" as const, reply_markup: networkKeyboard(type) };
   if (edit) {
@@ -134,7 +131,9 @@ async function sendDepositMenu(ctx: Context, type: DepositType, edit = false) {
 async function sendAddressPage(ctx: Context, network: Network, type: DepositType) {
   const coin = WALLET[network];
   const isDeposit = type === "deposit";
-  const amountLabel = isDeposit ? `Minimum $${MIN_DEPOSIT} USD` : `Minimum $${MIN_FEE_TOPUP} USDT`;
+  const amountLabel = isDeposit
+    ? `Minimum $${MIN_DEPOSIT} USDT`
+    : `Minimum $${MIN_FEE_TOPUP} USDT`;
 
   await ctx.reply(
     `┌─────────────────────────┐\n` +
@@ -143,9 +142,8 @@ async function sendAddressPage(ctx: Context, network: Network, type: DepositType
     `📋 *Send to this address:*\n\n` +
     `\`${coin.address}\`\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🌐 Network:    *${coin.network}*\n` +
-    `💵 Amount:     *${amountLabel}*\n` +
-    `⛽ Est. fee:   ${coin.fee}\n\n` +
+    `🌐 Network:  *${coin.network}*\n` +
+    `💵 Amount:   *${amountLabel}*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `⚠️ *Important:*\n` +
     `  • Send *only USDT* on the *${coin.network}* network\n` +
@@ -156,7 +154,7 @@ async function sendAddressPage(ctx: Context, network: Network, type: DepositType
   );
 }
 
-// ── Blockchain checkers ───────────────────────────────────────────────────────
+// ── Blockchain checkers ────────────────────────────────────────────────────────
 async function checkTRC20(p: PendingDeposit): Promise<{ found: boolean; txId?: string }> {
   const apiKey = process.env.TRONGRID_API_KEY ?? "";
   const url =
@@ -196,8 +194,8 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
   const now = new Date();
 
   if (pending.type === "fee_wallet") {
-    // Credit the fee wallet balance
     const newFeeBal = await addFeeBalance(pending.userId, pending.amount);
+    const weeksCovered = Math.floor(newFeeBal / WEEKLY_FEE);
 
     try {
       await ctx.api.sendMessage(
@@ -207,6 +205,7 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
         `🌐 Network: <b>${pending.network}</b>\n` +
         `💵 Amount: <b>+${pending.amount.toFixed(2)} USDT</b>\n` +
         `💼 New Fee Balance: <b>$${newFeeBal.toFixed(2)}</b>\n` +
+        `📅 Weeks Covered: <b>${weeksCovered}</b>\n` +
         `🔗 TX: <code>${txId}</code>`,
         { parse_mode: "HTML" }
       );
@@ -219,11 +218,11 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
       `🎉 *${pending.amount.toFixed(2)} USDT* added to your fee wallet!\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `💼 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
-      `💳 *Weekly Fee Cost:* $${WEEKLY_FEE}.00\n` +
-      `📅 *Weeks Covered:* ${Math.floor(newFeeBal / WEEKLY_FEE)}\n\n` +
+      `💳 *Weekly Fee Cost:*   $${WEEKLY_FEE}.00\n` +
+      `📅 *Weeks Covered:*     ${weeksCovered}\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `🔗 TX: \`${txId}\`\n\n` +
-      `You can now pay your weekly fee instantly with no crypto needed!`,
+      `You can now pay your weekly fee instantly — no crypto needed each time!`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
@@ -284,7 +283,7 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
   );
 }
 
-// ── Text input handler (called by form.ts) ────────────────────────────────────
+// ── Text input handler (called by form.ts) ─────────────────────────────────────
 export async function handleDepositTextInput(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const step = await getDepositStep(userId);
@@ -402,7 +401,7 @@ async function handleCheckPayment(ctx: Context) {
   await creditBalance(ctx, pending, result.txId!);
 }
 
-// ── Register all handlers ─────────────────────────────────────────────────────
+// ── Register all handlers ──────────────────────────────────────────────────────
 export function registerDepositHandlers(bot: Bot<Context>): void {
 
   bot.command("deposit", async (ctx) => { await sendDepositMenu(ctx, "deposit"); });
@@ -412,14 +411,13 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     await sendDepositMenu(ctx, "deposit");
   });
 
-  // Pay fee — check fee wallet balance first
+  // Pay fee — auto-deduct from fee wallet if sufficient balance
   bot.callbackQuery("menu_fee", async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from!.id;
     const feeBal = await getFeeBalance(userId);
 
     if (feeBal >= WEEKLY_FEE) {
-      // Auto-deduct from fee wallet — no crypto needed
       const newBal = await deductFeeBalance(userId);
 
       try {
@@ -441,7 +439,7 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `💼 *Remaining Fee Balance:* $${newBal.toFixed(2)}\n` +
         `✅ Account management active for another week.\n\n` +
-        `_No crypto transaction needed — paid instantly from your fee wallet._`,
+        `_No crypto transaction needed — paid instantly._`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
@@ -451,7 +449,6 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
         }
       );
     } else {
-      // Insufficient fee balance — prompt to top up
       const needed = (WEEKLY_FEE - feeBal).toFixed(2);
       await ctx.reply(
         `┌─────────────────────────┐\n` +
@@ -462,8 +459,8 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
         `📉 *Shortfall:*        $${needed} USDT\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `⚠️ *Insufficient fee wallet balance.*\n\n` +
-        `Top up your Trading Flux fee wallet with at least *$${needed} USDT* to pay this week's fee instantly — no crypto transaction needed each time.\n\n` +
-        `💡 _We recommend topping up $15–$30 to cover multiple weeks at once._`,
+        `Top up your Trading Flux fee wallet with at least *$${MIN_FEE_TOPUP} USDT* and pay future fees instantly — no crypto needed each time.\n\n` +
+        `💡 _Topping up $30 covers 10 weeks at once._`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
