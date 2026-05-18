@@ -18,13 +18,21 @@ function r(): Redis {
   });
 }
 
+// ── Account read/write ─────────────────────────────────────────────────────────
+
 async function getAccount(userId: number): Promise<{ data: AccountData; isDemo: boolean } | null> {
   const raw = await r().get<AccountData>(`acct:${userId}`);
   if (!raw) return null;
+
   const data: AccountData = {
     ...raw,
     startDate: new Date(raw.startDate as unknown as string),
+    // Convert adjustedDate from Redis string to Date so display logic is consistent
+    adjustedDate: raw.adjustedDate
+      ? new Date(raw.adjustedDate as unknown as string)
+      : undefined,
   };
+
   return { data, isDemo: false };
 }
 
@@ -62,6 +70,9 @@ export async function revokeAccount(userId: number): Promise<AccountData | null>
   return {
     ...raw,
     startDate: new Date(raw.startDate as unknown as string),
+    adjustedDate: raw.adjustedDate
+      ? new Date(raw.adjustedDate as unknown as string)
+      : undefined,
   };
 }
 
@@ -69,6 +80,8 @@ export async function getAllActiveUserIds(): Promise<number[]> {
   const members = await r().smembers<number[]>("active_accounts");
   return members.map((m) => Number(m));
 }
+
+// ── Keyboards ──────────────────────────────────────────────────────────────────
 
 function overviewKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
@@ -122,6 +135,8 @@ function accountKeyboard(isDemo: boolean): InlineKeyboard {
   return kb;
 }
 
+// ── Fallback screens ───────────────────────────────────────────────────────────
+
 async function sendPendingReview(ctx: Context, edit = false) {
   const text =
     `╔═══════════════════════════╗\n` +
@@ -167,6 +182,8 @@ async function sendNotRegistered(ctx: Context, edit = false) {
   if (edit) { try { await ctx.editMessageText(text, opts); return; } catch { } }
   await ctx.reply(text, opts);
 }
+
+// ── Dashboard renderer ─────────────────────────────────────────────────────────
 
 async function sendDashboard(
   ctx: Context,
@@ -215,6 +232,8 @@ async function sendDashboard(
   await ctx.reply(text, opts);
 }
 
+// ── Register handlers ──────────────────────────────────────────────────────────
+
 export function registerBalanceHandler(bot: Bot<Context>): void {
   bot.command("balance", async (ctx) => { await sendDashboard(ctx, "overview"); });
   bot.callbackQuery("menu_balance", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "overview"); });
@@ -222,5 +241,5 @@ export function registerBalanceHandler(bot: Bot<Context>): void {
   bot.callbackQuery("dash_projections", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "projections", true); });
   bot.callbackQuery("dash_daily", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "daily", true); });
   bot.callbackQuery("dash_account", async (ctx) => { await ctx.answerCallbackQuery(); await sendDashboard(ctx, "account", true); });
-  bot.callbackQuery("dash_refresh", async (ctx) => { await ctx.answerCallbackQuery({ text: "🔄 Refreshed!" }); await sendDashboard(ctx, "overview", true); }); // ✅ Fixed: was answerCallbackQuery("🔄 Refreshed!") — string arg not supported, must use options object
+  bot.callbackQuery("dash_refresh", async (ctx) => { await ctx.answerCallbackQuery({ text: "🔄 Refreshed!" }); await sendDashboard(ctx, "overview", true); });
 }
