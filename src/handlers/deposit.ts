@@ -1,6 +1,5 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
 import { Redis } from "@upstash/redis";
-import { computeBalance, computeCurrentBalance } from "../utils/balance";
 
 const WALLET = {
   TRC20: {
@@ -35,7 +34,7 @@ function r(): Redis {
   });
 }
 
-// ── Fee wallet balance helpers ─────────────────────────────────────────────────
+// ── Fee wallet helpers ─────────────────────────────────────────────────────────
 export async function getFeeBalance(userId: number): Promise<number> {
   return (await r().get<number>(`fee_bal:${userId}`)) ?? 0;
 }
@@ -60,7 +59,7 @@ async function deductFeeBalance(userId: number): Promise<number> {
   return newBal;
 }
 
-// ── Redis state ────────────────────────────────────────────────────────────────
+// ── Redis deposit state ────────────────────────────────────────────────────────
 interface DepositStep {
   network: Network;
   type: DepositType;
@@ -99,19 +98,10 @@ function uniqueAmount(base: number): number {
   return parseFloat((base + cents / 100).toFixed(2));
 }
 
-function fmtUSD(n: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(n);
-}
-
-// ── Premium receipt builder ────────────────────────────────────────────────────
+// ── Short premium receipt ──────────────────────────────────────────────────────
 function buildReceipt(opts: {
-  type: "deposit" | "fee_wallet";
   network: Network;
   amount: number;
-  newTradingBalance?: number;
   newFeeBalance: number;
   weeksCovered: number;
   txId: string;
@@ -121,50 +111,24 @@ function buildReceipt(opts: {
   const dateStr = now.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   const timeStr = now.toUTCString().slice(17, 22) + " UTC";
   const receiptNo = `TF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(opts.userId).slice(-4)}`;
-  const txShort = opts.txId.length > 20 ? opts.txId.slice(0, 12) + "..." + opts.txId.slice(-8) : opts.txId;
-  const typeLabel = opts.type === "deposit" ? "Trading Account Deposit" : "Fee Wallet Top-Up";
-
-  let accountSection = "";
-  if (opts.type === "deposit" && opts.newTradingBalance !== undefined) {
-    accountSection =
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `💰 *ACCOUNT SUMMARY*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `  New Balance:    *${fmtUSD(opts.newTradingBalance)}*\n` +
-      `  Growth Rate:    *+3.00% / day*\n` +
-      `  Compounding:    ✅ Active\n\n`;
-  }
+  const txShort = opts.txId.length > 16 ? opts.txId.slice(0, 8) + "..." + opts.txId.slice(-8) : opts.txId;
 
   return (
     `╔═══════════════════════════╗\n` +
-    `║  🧾  TRADING FLUX          ║\n` +
-    `║  OFFICIAL RECEIPT          ║\n` +
+    `║  🧾  TRADING FLUX RECEIPT  ║\n` +
     `╚═══════════════════════════╝\n\n` +
-    `  📄 Receipt No: \`${receiptNo}\`\n` +
-    `  📅 Date: *${dateStr}*\n` +
-    `  🕐 Time: *${timeStr}*\n\n` +
+    `📄 \`${receiptNo}\`  ·  📅 *${dateStr}*\n🕐 *${timeStr}*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 *TRANSACTION DETAILS*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `  Type:       *${typeLabel}*\n` +
-    `  Network:    *${opts.network === "TRC20" ? "TRON (TRC20)" : "Ethereum (ERC20)"}*\n` +
-    `  Amount:     *${opts.amount.toFixed(2)} USDT*\n` +
-    `  Status:     ✅ *CONFIRMED*\n\n` +
-    accountSection +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `  Network:  *${opts.network === "TRC20" ? "TRON (TRC20)" : "Ethereum (ERC20)"}*\n` +
+    `  Amount:   *${opts.amount.toFixed(2)} USDT*\n` +
+    `  Status:   ✅ *CONFIRMED*\n\n` +
     `💼 *FEE WALLET*\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `  Credited:       *+${fmtUSD(opts.amount)}*\n` +
-    `  New Balance:    *${fmtUSD(opts.newFeeBalance)}*\n` +
-    `  Weeks Covered:  *${opts.weeksCovered} weeks*\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🔗 *TX HASH*\n` +
-    `\`${txShort}\`\n\n` +
+    `  Credited: *+$${opts.amount.toFixed(2)}*\n` +
+    `  Balance:  *$${opts.newFeeBalance.toFixed(2)}*\n` +
+    `  Weeks:    *${opts.weeksCovered} covered*\n\n` +
+    `🔗 \`${txShort}\`\n\n` +
     `─────────────────────────\n` +
-    `  _Trading Flux — Professional_\n` +
-    `  _MT4/MT5 Account Management_\n` +
-    `  _© ${now.getFullYear()} All rights reserved_\n` +
-    `─────────────────────────`
+    `_Trading Flux · MT4/MT5 Account Management_`
   );
 }
 
@@ -184,32 +148,26 @@ function addressKeyboard(network: Network, type: DepositType) {
 }
 
 // ── Shared senders ─────────────────────────────────────────────────────────────
-async function sendDepositMenu(ctx: Context, type: DepositType, edit = false) {
+async function sendDepositMenu(ctx: Context, type: DepositType) {
   const isDeposit = type === "deposit";
-  const text =
+  await ctx.reply(
     `┌─────────────────────────┐\n` +
     `│  💰 ${isDeposit ? "DEPOSIT FUNDS         " : "TOP UP FEE WALLET     "}│\n` +
     `└─────────────────────────┘\n\n` +
     (isDeposit
-      ? `Add funds to your Trading Flux account.\n\n📌 Minimum deposit: *$${MIN_DEPOSIT} USDT*\n`
+      ? `Add USDT to your Trading Flux account.\n\n📌 Minimum deposit: *$${MIN_DEPOSIT} USDT*\n`
       : `Add USDT to your fee wallet to cover weekly management fees.\n\n📌 Minimum top-up: *$${MIN_FEE_TOPUP} USDT*\n💡 Each week costs *$${WEEKLY_FEE} USDT*\n`) +
     `\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🌐 Select your preferred network:\n\n` +
     `  💜 *TRC20* — Recommended\n` +
-    `  🔵 *ERC20*\n`;
-
-  const opts = { parse_mode: "Markdown" as const, reply_markup: networkKeyboard(type) };
-  if (edit) {
-    try { await ctx.editMessageText(text, opts); return; } catch { }
-  }
-  await ctx.reply(text, opts);
+    `  🔵 *ERC20*\n`,
+    { parse_mode: "Markdown", reply_markup: networkKeyboard(type) }
+  );
 }
 
 async function sendAddressPage(ctx: Context, network: Network, type: DepositType) {
   const coin = WALLET[network];
   const isDeposit = type === "deposit";
-  const amountLabel = isDeposit ? `Minimum $${MIN_DEPOSIT} USDT` : `Minimum $${MIN_FEE_TOPUP} USDT`;
-
   await ctx.reply(
     `┌─────────────────────────┐\n` +
     `│  ${coin.label} ${isDeposit ? "DEPOSIT" : "TOP-UP"}            │\n` +
@@ -218,12 +176,11 @@ async function sendAddressPage(ctx: Context, network: Network, type: DepositType
     `\`${coin.address}\`\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🌐 Network:  *${coin.network}*\n` +
-    `💵 Amount:   *${amountLabel}*\n\n` +
+    `💵 Amount:   *Minimum $${isDeposit ? MIN_DEPOSIT : MIN_FEE_TOPUP} USDT*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `⚠️ *Important:*\n` +
     `  • Send *only USDT* on the *${coin.network}* network\n` +
-    `  • Sending wrong token = permanent loss\n` +
-    `  • Tap QR code for easy scanning\n\n` +
+    `  • Sending wrong token = permanent loss\n\n` +
     `After sending, tap ✅ *I've Sent Payment* below.`,
     { parse_mode: "Markdown", reply_markup: addressKeyboard(network, type) }
   );
@@ -258,101 +215,21 @@ async function checkERC20(p: PendingDeposit): Promise<{ found: boolean; txId?: s
   return { found: !!match, txId: match?.hash };
 }
 
-// ── Credit balance after confirmed payment ─────────────────────────────────────
+// ── Credit: ALL deposits go to fee wallet only ─────────────────────────────────
 async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string) {
   await removePending(pending.userId);
-  const redis = r();
-  const now = new Date();
 
-  if (pending.type === "fee_wallet") {
-    const newFeeBal = await addFeeBalance(pending.userId, pending.amount);
-    const weeksCovered = Math.floor(newFeeBal / WEEKLY_FEE);
-
-    try {
-      await ctx.api.sendMessage(
-        process.env.ADMIN_CHANNEL_ID!,
-        `💼 <b>FEE WALLET TOP-UP CONFIRMED</b>\n\n` +
-        `👤 User ID: <code>${pending.userId}</code>\n` +
-        `🌐 Network: <b>${pending.network}</b>\n` +
-        `💵 Amount: <b>+${pending.amount.toFixed(2)} USDT</b>\n` +
-        `💼 New Fee Balance: <b>$${newFeeBal.toFixed(2)}</b>\n` +
-        `📅 Weeks Covered: <b>${weeksCovered}</b>\n` +
-        `🔗 TX: <code>${txId}</code>`,
-        { parse_mode: "HTML" }
-      );
-    } catch { }
-
-    await ctx.reply(
-      `╔═══════════════════════════╗\n` +
-      `║  ✅  FEE WALLET TOPPED UP! ║\n` +
-      `╚═══════════════════════════╝\n\n` +
-      `🎉 *${pending.amount.toFixed(2)} USDT* added to your fee wallet!\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `💼 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
-      `💳 *Weekly Fee Cost:*   $${WEEKLY_FEE}.00\n` +
-      `📅 *Weeks Covered:*     ${weeksCovered}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🔗 TX: \`${txId}\``,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard()
-          .text("💳 Pay Fee Now ($3)", "menu_fee").row()
-          .text("💼 View Fee Wallet", "dash_account").row()
-          .text("🏠 Main Menu", "menu_main"),
-      }
-    );
-
-    // Send receipt
-    await ctx.reply(
-      buildReceipt({
-        type: "fee_wallet",
-        network: pending.network,
-        amount: pending.amount,
-        newFeeBalance: newFeeBal,
-        weeksCovered,
-        txId,
-        userId: pending.userId,
-      }),
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-
-  // ── Trading account deposit ───────────────────────────────────────────────
-  const account = await redis.get<any>(`acct:${pending.userId}`);
-  let newBalance: number;
-
-  if (account) {
-    const accountData = {
-      ...account,
-      startDate: new Date(account.startDate as string),
-      adjustedDate: account.adjustedDate ? new Date(account.adjustedDate as string) : undefined,
-      adjustedBalance: account.adjustedBalance ?? undefined,
-    };
-    const currentBalance = computeCurrentBalance(accountData, now);
-    newBalance = parseFloat((currentBalance + pending.amount).toFixed(2));
-    await redis.set(`acct:${pending.userId}`, {
-      ...account,
-      adjustedBalance: newBalance,
-      adjustedDate: now.toISOString(),
-    });
-  } else {
-    newBalance = pending.amount;
-  }
-
-  // Auto-credit fee wallet with the deposited amount
   const newFeeBal = await addFeeBalance(pending.userId, pending.amount);
   const weeksCovered = Math.floor(newFeeBal / WEEKLY_FEE);
 
   try {
     await ctx.api.sendMessage(
       process.env.ADMIN_CHANNEL_ID!,
-      `💰 <b>DEPOSIT AUTO-CONFIRMED</b>\n\n` +
+      `💰 <b>DEPOSIT CONFIRMED</b>\n\n` +
       `👤 User ID: <code>${pending.userId}</code>\n` +
       `🌐 Network: <b>${pending.network}</b>\n` +
       `💵 Amount: <b>${pending.amount.toFixed(2)} USDT</b>\n` +
-      `💼 New Balance: <b>$${newBalance.toFixed(2)}</b>\n` +
-      `💳 Fee Wallet: <b>$${newFeeBal.toFixed(2)}</b> (${weeksCovered} weeks covered)\n` +
+      `💼 Fee Wallet: <b>$${newFeeBal.toFixed(2)}</b> (${weeksCovered} weeks covered)\n` +
       `🔗 TX: <code>${txId}</code>`,
       { parse_mode: "HTML" }
     );
@@ -362,40 +239,36 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     `╔═══════════════════════════╗\n` +
     `║  ✅  DEPOSIT CONFIRMED!    ║\n` +
     `╚═══════════════════════════╝\n\n` +
-    `🎉 *${pending.amount.toFixed(2)} USDT* has been credited!\n\n` +
+    `🎉 *${pending.amount.toFixed(2)} USDT* received!\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *New Balance:* $${newBalance.toFixed(2)}\n` +
-    `📈 Rate: *+3% / day*\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💼 *Fee Wallet Credited:* +$${pending.amount.toFixed(2)}\n` +
-    `💳 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
+    `💼 *Fee Wallet Balance:* $${newFeeBal.toFixed(2)}\n` +
     `📅 *Weeks Covered:* ${weeksCovered}`,
     {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
-        .text("📊 View Dashboard", "menu_balance").row()
-        .text("💼 View Fee Wallet", "dash_account").row()
+        .text("📊 Dashboard", "menu_balance")
         .text("🏠 Main Menu", "menu_main"),
     }
   );
 
-  // Send premium receipt
   await ctx.reply(
     buildReceipt({
-      type: "deposit",
       network: pending.network,
       amount: pending.amount,
-      newTradingBalance: newBalance,
       newFeeBalance: newFeeBal,
       weeksCovered,
       txId,
       userId: pending.userId,
     }),
-    { parse_mode: "Markdown" }
+    {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard()
+        .text("💼 View Fee Wallet & Pay Fee", "menu_fee"),
+    }
   );
 }
 
-// ── Text input handler (called by form.ts) ─────────────────────────────────────
+// ── Text input handler (called from form.ts) ───────────────────────────────────
 export async function handleDepositTextInput(ctx: Context): Promise<boolean> {
   const userId = ctx.from!.id;
   const step = await getDepositStep(userId);
@@ -411,16 +284,9 @@ export async function handleDepositTextInput(ctx: Context): Promise<boolean> {
     await ctx.reply(`⚠️ *Invalid amount.* Enter a number (e.g. \`50\`):`, { parse_mode: "Markdown" });
     return true;
   }
-  if (isDeposit && amount < MIN_DEPOSIT) {
+  if (amount < (isDeposit ? MIN_DEPOSIT : MIN_FEE_TOPUP)) {
     await ctx.reply(
-      `⚠️ *Minimum deposit is $${MIN_DEPOSIT} USDT.*\n\nYou entered $${amount}. Please enter a higher amount:`,
-      { parse_mode: "Markdown" }
-    );
-    return true;
-  }
-  if (!isDeposit && amount < MIN_FEE_TOPUP) {
-    await ctx.reply(
-      `⚠️ *Minimum fee wallet top-up is $${MIN_FEE_TOPUP} USDT.*\n\nYou entered $${amount}. Please enter a higher amount:`,
+      `⚠️ *Minimum is $${isDeposit ? MIN_DEPOSIT : MIN_FEE_TOPUP} USDT.*\n\nYou entered $${amount}. Please enter a higher amount:`,
       { parse_mode: "Markdown" }
     );
     return true;
@@ -448,8 +314,7 @@ export async function handleDepositTextInput(ctx: Context): Promise<boolean> {
     `📬 *To:* \`${coin.address}\`\n` +
     `🌐 *Network:* ${coin.network}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚠️ Send the *exact amount* shown above.\n` +
-    `The unique cents help us identify your payment.\n\n` +
+    `⚠️ The unique cents help us identify your payment.\n\n` +
     `⏱ Payment expires in *60 minutes.*`,
     {
       parse_mode: "Markdown",
@@ -537,7 +402,7 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
           `💳 <b>WEEKLY FEE AUTO-PAID</b>\n\n` +
           `👤 User ID: <code>${userId}</code>\n` +
           `💵 Deducted: <b>$${WEEKLY_FEE}.00</b> from fee wallet\n` +
-          `💼 Remaining fee balance: <b>$${newBal.toFixed(2)}</b>`,
+          `💼 Remaining balance: <b>$${newBal.toFixed(2)}</b>`,
           { parse_mode: "HTML" }
         );
       } catch { }
@@ -548,14 +413,14 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
         `╚═══════════════════════════╝\n\n` +
         `🎉 *$${WEEKLY_FEE}.00* deducted from your fee wallet!\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-        `💼 *Remaining Fee Balance:* $${newBal.toFixed(2)}\n` +
+        `💼 *Remaining Balance:* $${newBal.toFixed(2)}\n` +
         `✅ Account management active for another week.\n\n` +
         `_No crypto transaction needed — paid instantly._`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
-            .text("📊 View Dashboard", "menu_balance").row()
-            .text("💰 Top Up Fee Wallet", "menu_fee_topup")
+            .text("📊 Dashboard", "menu_balance")
+            .text("💰 Top Up", "menu_fee_topup").row()
             .text("🏠 Main Menu", "menu_main"),
         }
       );
@@ -602,10 +467,9 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     await ctx.replyWithPhoto(coin.qrUrl, {
       caption:
         `📸 *${coin.label} QR Code*\n\n` +
-        `Scan with your wallet to get the address.\n\n` +
         `🌐 Network: *${coin.network}*\n` +
         `💵 ${isDeposit ? `Minimum: *$${MIN_DEPOSIT} USDT*` : `Minimum: *$${MIN_FEE_TOPUP} USDT*`}\n\n` +
-        `Or copy manually:\n\`${coin.address}\``,
+        `Or copy address manually:\n\`${coin.address}\``,
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
         .text("✅ I've Sent Payment", `dep_sent_${network}_${type}`).row()
@@ -620,8 +484,7 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     await setDepositStep(ctx.from!.id, { network: network as Network, type: type as DepositType });
     await ctx.reply(
       `💬 *How much did you send?*\n\n` +
-      `Enter the exact USDT amount you sent:\n` +
-      `_e.g._ \`${isDeposit ? "50" : "10"}\`\n\n` +
+      `Enter the exact USDT amount:\n_e.g._ \`${isDeposit ? "50" : "10"}\`\n\n` +
       `${isDeposit ? `📌 Minimum: *$${MIN_DEPOSIT} USDT*` : `📌 Minimum: *$${MIN_FEE_TOPUP} USDT*`}`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("❌ Cancel", "dep_cancel") }
     );
@@ -637,7 +500,7 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     await clearDepositStep(ctx.from!.id);
     await removePending(ctx.from!.id);
     await ctx.reply(
-      `❌ *Payment cancelled.*\n\nNo submission was made.`,
+      `❌ *Payment cancelled.*`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
