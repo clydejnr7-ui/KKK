@@ -5,7 +5,7 @@ import { savePending } from "../pending";
 import { handleDepositTextInput } from "./deposit";
 import { handleSupportTextInput, handleUserReplyToSupport, setSupportStep, clearSupportStep } from "./support";
 import { Redis } from "@upstash/redis";
-import { AccountData, computeBalance, formatUSD } from "../utils/balance";
+import { AccountData, computeCurrentBalance, formatUSD } from "../utils/balance";
 import { isPending } from "../pending";
 
 function r(): Redis {
@@ -16,9 +16,14 @@ function r(): Redis {
 }
 
 async function getAccountData(userId: number): Promise<AccountData | null> {
-  const raw = await r().get<AccountData>(`acct:${userId}`);
+  const raw = await r().get<any>(`acct:${userId}`);
   if (!raw) return null;
-  return { ...raw, startDate: new Date(raw.startDate as unknown as string) };
+  return {
+    ...raw,
+    startDate: new Date(raw.startDate as string),
+    adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate as string) : undefined,
+    adjustedBalance: raw.adjustedBalance ?? undefined,
+  };
 }
 
 const LOGO = `
@@ -42,7 +47,8 @@ function mainMenuKeyboard(): InlineKeyboard {
     .text("💳 Pay Fee ($3)", "menu_fee").row()
     .text("❓ How It Works", "menu_howitworks")
     .text("💬 Support", "menu_support").row()
-    .text("📋 My Status", "menu_status");
+    .text("📋 My Status", "menu_status")
+    .text("🔄 Refresh", "menu_refresh");
 }
 
 function cancelKeyboard(): InlineKeyboard {
@@ -56,13 +62,18 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
   if (ctx.from?.id) {
     const account = await getAccountData(ctx.from.id);
     if (account) {
-      const daysElapsed = Math.max(0, Math.floor((Date.now() - account.startDate.getTime()) / 86_400_000));
-      const currentBalance = computeBalance(account.deposit, daysElapsed);
+      const now = new Date();
+      const currentBalance = computeCurrentBalance(account, now);
+      const todayDailyEarning = currentBalance * 0.03;
+      const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+      const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
+
       balanceLine =
         `\n┌─────────────────────────┐\n` +
         `│  💰 Your Balance          │\n` +
         `│  *${formatUSD(currentBalance).padEnd(24)}*│\n` +
-        `│  📥 Deposit: ${formatUSD(account.deposit).padEnd(13)}│\n` +
+        `│  📥 Deposited: ${formatUSD(account.deposit).padEnd(11)}│\n` +
+        `│  ✅ Today so far: ${formatUSD(earnedToday).padEnd(8)}│\n` +
         `└─────────────────────────┘\n`;
     }
   }
@@ -116,6 +127,11 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await sendMainMenu(ctx, ctx.from?.first_name);
   });
 
+  bot.callbackQuery("menu_refresh", async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "🔄 Refreshed!" });
+    await sendMainMenu(ctx, ctx.from?.first_name);
+  });
+
   bot.callbackQuery("menu_register", async (ctx) => {
     await ctx.answerCallbackQuery();
     await resetSession(ctx.from!.id);
@@ -143,8 +159,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.reply(
       `*💬 Contact Support*\n${"─".repeat(28)}\n\n` +
       `Our support team is available 24/7 and will reply to you directly here in this chat.\n\n` +
-      `📝 *Describe your issue or question:*\n\n` +
-      `_Type your message below and tap Send._`,
+      `📝 *Describe your issue or question:*\n\n_Type your message below and tap Send._`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
@@ -164,29 +179,32 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const account = await getAccountData(userId);
 
     if (account) {
+      const now = new Date();
       const msPerDay = 86_400_000;
-      const daysElapsed = Math.max(0, Math.floor((Date.now() - account.startDate.getTime()) / msPerDay));
-      const currentBalance = computeBalance(account.deposit, daysElapsed);
+      const daysElapsed = Math.max(0, Math.floor((now.getTime() - account.startDate.getTime()) / msPerDay));
+      const currentBalance = computeCurrentBalance(account, now);
       const totalProfit = currentBalance - account.deposit;
       const growthPct = account.deposit > 0 ? ((currentBalance - account.deposit) / account.deposit) * 100 : 0;
+      const todayDailyEarning = currentBalance * 0.03;
+      const minuteOfDay = now.getHours() * 60 + now.getMinutes();
+      const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
 
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
-        `👤 *${account.fullName}*\n` +
-        `📌 Status: *🟢 Active*\n\n` +
-        `${"━".repeat(28)}\n` +
+        `👤 *${account.fullName}*\n📌 Status: *🟢 Active*\n\n${"━".repeat(28)}\n` +
         `💵 *BALANCE SUMMARY*\n\n` +
         `  💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
-        `  📥 Your Deposit:     *${formatUSD(account.deposit)}*\n` +
+        `  📥 Original Deposit: *${formatUSD(account.deposit)}*\n` +
+        (account.adjustedBalance != null ? `  📌 Updated Balance:  *${formatUSD(account.adjustedBalance)}*\n` : ``) +
         `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
-        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n\n` +
-        `${"━".repeat(28)}\n` +
-        `🖥️ *${account.platform ?? "—"}*\n` +
-        `📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
+        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n` +
+        `  ✅ Earned today:     *+${formatUSD(earnedToday)}*\n\n` +
+        `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
             .text("📊 Full Dashboard", "menu_balance").row()
+            .text("📅 Daily Log", "dash_daily").row()
             .text("💰 Deposit More", "menu_deposit")
             .text("🏠 Main Menu", "menu_main"),
         }
@@ -197,9 +215,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     if (await isPending(userId)) {
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
-        `📌 Status: *⏳ Under Review*\n\n` +
-        `Your submission is being reviewed by our team.\n` +
-        `You'll be notified within 24 hours once approved.`,
+        `📌 Status: *⏳ Under Review*\n\nYour submission is being reviewed by our team.\nYou'll be notified within 24 hours once approved.`,
         { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main") }
       );
       return;
@@ -207,8 +223,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
     await ctx.reply(
       `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
-      `📌 Status: *⚪ Not Registered Yet*\n\n` +
-      `Complete the registration form to submit your MT4/MT5 account for management.`,
+      `📌 Status: *⚪ Not Registered Yet*\n\nComplete the registration form to submit your MT4/MT5 account for management.`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("📝 Register Now", "menu_register").row().text("🏠 Main Menu", "menu_main") }
     );
   });
@@ -277,11 +292,9 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
 
-    // Check if user is replying directly to a support message from admin
     const handledByUserReply = await handleUserReplyToSupport(ctx);
     if (handledByUserReply) return;
 
-    // Check if user is composing a new support request
     const handledBySupport = await handleSupportTextInput(ctx);
     if (handledBySupport) return;
 
