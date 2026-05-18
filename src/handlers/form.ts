@@ -68,11 +68,16 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
       const minuteOfDay = now.getHours() * 60 + now.getMinutes();
       const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
 
+      // Profit base: adjustedBalance if set, otherwise original deposit
+      const profitBase = account.adjustedBalance != null ? account.adjustedBalance : account.deposit;
+      const totalProfit = currentBalance - profitBase;
+
       balanceLine =
         `\n┌─────────────────────────┐\n` +
         `│  💰 Your Balance          │\n` +
         `│  *${formatUSD(currentBalance).padEnd(24)}*│\n` +
         `│  📥 Deposited: ${formatUSD(account.deposit).padEnd(11)}│\n` +
+        `│  📈 Profit:    ${formatUSD(totalProfit).padEnd(11)}│\n` +
         `│  ✅ Today so far: ${formatUSD(earnedToday).padEnd(8)}│\n` +
         `└─────────────────────────┘\n`;
     }
@@ -183,11 +188,19 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       const msPerDay = 86_400_000;
       const daysElapsed = Math.max(0, Math.floor((now.getTime() - account.startDate.getTime()) / msPerDay));
       const currentBalance = computeCurrentBalance(account, now);
-      const totalProfit = currentBalance - account.deposit;
-      const growthPct = account.deposit > 0 ? ((currentBalance - account.deposit) / account.deposit) * 100 : 0;
+
+      // Profit base: adjustedBalance if set, otherwise original deposit
+      const profitBase = account.adjustedBalance != null ? account.adjustedBalance : account.deposit;
+      const totalProfit = currentBalance - profitBase;
+      const growthPct = profitBase > 0 ? ((currentBalance - profitBase) / profitBase) * 100 : 0;
+
       const todayDailyEarning = currentBalance * 0.03;
       const minuteOfDay = now.getHours() * 60 + now.getMinutes();
       const earnedToday = todayDailyEarning * (minuteOfDay / 1440);
+
+      const profitLabel = account.adjustedBalance != null
+        ? `  📈 Profit Since Update: `
+        : `  📈 Total Profit:        `;
 
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
@@ -196,7 +209,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
         `  💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
         `  📥 Original Deposit: *${formatUSD(account.deposit)}*\n` +
         (account.adjustedBalance != null ? `  📌 Updated Balance:  *${formatUSD(account.adjustedBalance)}*\n` : ``) +
-        `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
+        `${profitLabel}*+${formatUSD(totalProfit)}*\n` +
         `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n` +
         `  ✅ Earned today:     *+${formatUSD(earnedToday)}*\n\n` +
         `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`,
