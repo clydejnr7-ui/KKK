@@ -234,14 +234,13 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
   }
 
   // ── Trading account deposit ───────────────────────────────────────────────
-  // We add the deposited amount on top of whatever the account shows RIGHT NOW
-  // (respecting adjustedBalance if set), then store that as the new adjustedBalance
-  // so profit tracking stays correct going forward.
+  // Compute true current balance (honours adjustedBalance if present),
+  // add the deposited amount, then store as new adjustedBalance from today
+  // so profit tracking resets correctly from the new higher base.
   const account = await redis.get<any>(`acct:${pending.userId}`);
   let newBalance: number;
 
   if (account) {
-    // Compute true current balance (honours adjustedBalance if present)
     const accountData = {
       ...account,
       startDate: new Date(account.startDate as string),
@@ -251,7 +250,6 @@ async function creditBalance(ctx: Context, pending: PendingDeposit, txId: string
     const currentBalance = computeCurrentBalance(accountData, now);
     newBalance = parseFloat((currentBalance + pending.amount).toFixed(2));
 
-    // Store as adjustedBalance from today so the profit base resets correctly
     await redis.set(`acct:${pending.userId}`, {
       ...account,
       adjustedBalance: newBalance,
@@ -421,7 +419,6 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     await sendDepositMenu(ctx, "deposit");
   });
 
-  // Pay fee — auto-deduct from fee wallet if sufficient balance
   bot.callbackQuery("menu_fee", async (ctx) => {
     await ctx.answerCallbackQuery();
     const userId = ctx.from!.id;
@@ -481,7 +478,6 @@ export function registerDepositHandlers(bot: Bot<Context>): void {
     }
   });
 
-  // Top up fee wallet
   bot.callbackQuery("menu_fee_topup", async (ctx) => {
     await ctx.answerCallbackQuery();
     await sendDepositMenu(ctx, "fee_wallet");
