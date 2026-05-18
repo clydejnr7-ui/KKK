@@ -242,14 +242,46 @@ export function buildDailyLogTab(data: AccountData): string {
 
   const currentBalance = computeCurrentBalance(data, now);
   const todayDailyEarning = currentBalance * 0.03;
-
   const dayFrac = todayFraction(now);
-  const earnedToday = todayDailyEarning * dayFrac;
-  const remainingToday = todayDailyEarning - earnedToday;
 
-  // Total earned = total profit from original deposit (includes admin bumps)
+  // Total profit from original deposit
   const totalEarned = currentBalance - data.deposit;
 
+  const adjustedNote = data.adjustedBalance != null
+    ? `\n📌 _Base updated to ${formatUSD(data.adjustedBalance)}_`
+    : ``;
+
+  // ── TODAY section ────────────────────────────────────────────────────────────
+  // Day 0 = earnings haven't started yet. Show countdown instead of fake partial.
+  // Day 1+ = show real in-progress earnings based on clock fraction.
+  let todaySection: string;
+
+  if (daysElapsed === 0) {
+    const tomorrow = new Date(now);
+    tomorrow.setHours(24, 0, 0, 0);
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    const hoursLeft = msUntilMidnight / 3_600_000;
+    const hh = Math.floor(hoursLeft);
+    const mm = Math.floor((hoursLeft - hh) * 60);
+    const waitBar = progressBar(dayFrac * 100);
+    todaySection =
+      `⏳ *FIRST EARNINGS (Pending)*\n` +
+      `  ${waitBar}\n` +
+      `  ⏱ Starts in: *${hh}h ${mm}m*\n` +
+      `  💵 First payout: *${formatUSD(todayDailyEarning)}*\n` +
+      `  📅 Daily rate: +3.00% compounding\n`;
+  } else {
+    const earnedToday = todayDailyEarning * dayFrac;
+    const remainingToday = todayDailyEarning - earnedToday;
+    todaySection =
+      `⚡ *TODAY  (In Progress)*\n` +
+      `  ${progressBar(dayFrac * 100, 18)}\n` +
+      `  ✅ Earned so far:  *${formatUSD(earnedToday)}*\n` +
+      `  ⏳ Still incoming: ${formatUSD(remainingToday)}\n` +
+      `  📦 Full day total: *${formatUSD(todayDailyEarning)}*\n`;
+  }
+
+  // ── Completed day rows ───────────────────────────────────────────────────────
   const rows: string[] = [];
   const showDays = Math.min(daysElapsed, 7);
 
@@ -261,10 +293,6 @@ export function buildDailyLogTab(data: AccountData): string {
     rows.push(`  ${label}  Day ${String(dayNum).padEnd(3)}  +${formatUSD(profit)}`);
   }
 
-  const adjustedNote = data.adjustedBalance != null
-    ? `\n📌 _Base updated to ${formatUSD(data.adjustedBalance)}_`
-    : ``;
-
   return (
     `╔═══════════════════════════╗\n` +
     `║  📅  DAILY EARNINGS LOG   ║\n` +
@@ -274,11 +302,7 @@ export function buildDailyLogTab(data: AccountData): string {
     `💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
     `📊 Active for *${daysElapsed} day${daysElapsed === 1 ? "" : "s"}*${adjustedNote}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `⚡ *TODAY  (In Progress)*\n` +
-    `  ${progressBar(dayFrac * 100, 18)}\n` +
-    `  ✅ Earned so far:  *${formatUSD(earnedToday)}*\n` +
-    `  ⏳ Still incoming: ${formatUSD(remainingToday)}\n` +
-    `  📦 Full day total: *${formatUSD(todayDailyEarning)}*\n\n` +
+    todaySection +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `📋 *LAST ${showDays} COMPLETED DAYS*\n\n` +
     (rows.length > 0
@@ -290,7 +314,6 @@ export function buildDailyLogTab(data: AccountData): string {
     `🔁 Profits compound automatically every 24h`
   );
 }
-
 export function buildAccountTab(data: AccountData, isDemo: boolean, feeBalance?: number): string {
   const statusLine = isDemo
     ? `🟡 *Demo Preview* — Not yet activated`
