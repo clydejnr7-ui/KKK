@@ -36,11 +36,6 @@ function effectiveStart(account: AccountData): Date {
   return account.startDate;
 }
 
-/** Fraction of today elapsed based on real clock (0–1) */
-function todayFraction(now: Date): number {
-  return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
-}
-
 const LOGO = `
 ┌─────────────────────────┐
 │    📊  TRADING FLUX      │
@@ -215,9 +210,6 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       const totalProfit = currentBalance - account.deposit;
       const growthPct = account.deposit > 0 ? (totalProfit / account.deposit) * 100 : 0;
 
-      const todayDailyEarning = currentBalance * 0.03;
-      const earnedToday = todayDailyEarning * todayFraction(now);
-
       const activeLabel = account.adjustedBalance != null
         ? `Day *${daysElapsed}* since last update  ·  +3%/day`
         : `Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`;
@@ -232,8 +224,7 @@ export function registerFormHandlers(bot: Bot<Context>): void {
           ? `  📌 Updated Base:     *${formatUSD(account.adjustedBalance)}*\n`
           : ``) +
         `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
-        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n` +
-        `  ✅ Earned today:     *+${formatUSD(earnedToday)}*\n\n` +
+        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n\n` +
         `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 ${activeLabel}`,
         {
           parse_mode: "Markdown",
