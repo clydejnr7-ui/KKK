@@ -79,9 +79,6 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
     if (account) {
       const now = new Date();
       const currentBalance = computeCurrentBalance(account, now);
-      const todayDailyEarning = currentBalance * 0.03;
-      const earnedToday = todayDailyEarning * todayFraction(now);
-      // Profit always vs original deposit — reflects full gain including admin bumps
       const totalProfit = currentBalance - account.deposit;
 
       balanceLine =
@@ -90,7 +87,6 @@ async function sendMainMenu(ctx: Context, firstName?: string) {
         `│  *${formatUSD(currentBalance).padEnd(24)}*│\n` +
         `│  📥 Deposited: ${formatUSD(account.deposit).padEnd(11)}│\n` +
         `│  📈 Profit:    ${formatUSD(totalProfit).padEnd(11)}│\n` +
-        `│  ✅ Today so far: ${formatUSD(earnedToday).padEnd(8)}│\n` +
         `└─────────────────────────┘\n`;
     }
   }
@@ -212,13 +208,10 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       const now = new Date();
       const msPerDay = 86_400_000;
 
-      // Day counter from effective start (adjustedDate if set)
       const start = effectiveStart(account);
       const daysElapsed = Math.max(0, Math.floor((now.getTime() - start.getTime()) / msPerDay));
 
       const currentBalance = computeCurrentBalance(account, now);
-
-      // Profit always vs original deposit — reflects full gain including admin bumps
       const totalProfit = currentBalance - account.deposit;
       const growthPct = account.deposit > 0 ? (totalProfit / account.deposit) * 100 : 0;
 
