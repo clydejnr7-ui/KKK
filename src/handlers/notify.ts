@@ -99,7 +99,7 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
     for (const userId of userIds) {
       const status = await sendFeeReminder(ctx, userId);
       if (status === "ok") { sent++; } else { failed++; failedIds.push(userId); }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((res) => setTimeout(res, 100));
     }
 
     await ctx.api.sendMessage(
@@ -142,7 +142,7 @@ export function registerNotifyHandlers(bot: Bot<Context>): void {
       await ctx.api.sendMessage(
         userId,
         `╔═══════════════════════════╗\n` +
-        `║  🎁  FEE CREDIT RECEIVED!  ║\n` +
+        `║  🎁  FEE CREDIT RECEIVED\\!  ║\n` +
         `╚═══════════════════════════╝\n\n` +
         `Our team has added *$${amount.toFixed(2)} USDT* to your fee wallet\\!\n\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
