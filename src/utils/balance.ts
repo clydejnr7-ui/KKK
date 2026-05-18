@@ -85,8 +85,13 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
   const daysElapsed = Math.max(0, Math.floor((now.getTime() - data.startDate.getTime()) / msPerDay));
 
   const currentBalance = live ? live.balance : computeCurrentBalance(data, now);
-  const totalProfit = currentBalance - data.deposit;
-  const growthPct = data.deposit > 0 ? ((currentBalance - data.deposit) / data.deposit) * 100 : 0;
+
+  // Profit base: use adjustedBalance if set, otherwise original deposit.
+  // This means profit = growth SINCE the last admin update, not since day 1.
+  const profitBase = (data.adjustedBalance != null) ? data.adjustedBalance : data.deposit;
+  const totalProfit = currentBalance - profitBase;
+  const growthPct = profitBase > 0 ? ((currentBalance - profitBase) / profitBase) * 100 : 0;
+
   const nextMilestone = Math.ceil(currentBalance / 1000) * 1000;
   const healthScore = Math.min(100, 50 + daysElapsed * 2);
   const growthBar = progressBar(Math.min(growthPct, 100));
@@ -140,9 +145,15 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
     ? `🟢 Live · ${data.platform ?? ""} · ${data.broker ?? ""}`
     : `⚪ Estimated · +3%/day compound`;
 
+  // Only show the updated balance note when there's an adjustment
   const updatedNote = (!live && data.adjustedBalance != null)
-    ? `📌 Updated balance: _${formatUSD(data.adjustedBalance)}_\n`
+    ? `📌 Updated balance: _${formatUSD(data.adjustedBalance)}_  _(profit base)_\n`
     : ``;
+
+  // Label changes depending on whether we have an adjusted balance
+  const profitLabel = data.adjustedBalance != null
+    ? `📈 Profit Since Update`
+    : `📈 Net Profit        `;
 
   return (
     `╔═══════════════════════════╗\n` +
@@ -156,7 +167,7 @@ export function buildOverviewTab(data: AccountData, live?: LiveBalance): string 
     `└─────────────────────────┘\n\n` +
     `📥 Original Deposit  ${formatUSD(data.deposit)}\n` +
     updatedNote +
-    `📈 Net Profit    *${totalProfit >= 0 ? "+" : ""}${formatUSD(totalProfit)}*\n` +
+    `${profitLabel}  *${totalProfit >= 0 ? "+" : ""}${formatUSD(totalProfit)}*\n` +
     `🚀 Growth        *${growthPct >= 0 ? "+" : ""}${growthPct.toFixed(2)}%*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     middleSection +
@@ -255,11 +266,17 @@ export function buildDailyLogTab(data: AccountData): string {
     rows.push(`  ${label}  Day ${String(dayNum).padEnd(3)}  +${formatUSD(profit)}`);
   }
 
-  const totalEarned = currentBalance - data.deposit;
+  // Profit base: growth since last admin update (or since deposit if no update)
+  const profitBase = (data.adjustedBalance != null) ? data.adjustedBalance : data.deposit;
+  const totalEarned = currentBalance - profitBase;
 
   const adjustedNote = data.adjustedBalance != null
-    ? `\n📌 _Admin updated: ${formatUSD(data.adjustedBalance)}_`
+    ? `\n📌 _Updated balance: ${formatUSD(data.adjustedBalance)}_`
     : ``;
+
+  const totalEarnedLabel = data.adjustedBalance != null
+    ? `💰 *Profit since last update:*`
+    : `💰 *Total earned to date:*`;
 
   return (
     `╔═══════════════════════════╗\n` +
@@ -281,7 +298,7 @@ export function buildDailyLogTab(data: AccountData): string {
       ? rows.join("\n")
       : `  _No completed days yet. Check back tomorrow!_`) +
     `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💰 *Total earned to date:*\n` +
+    `${totalEarnedLabel}\n` +
     `   *+${formatUSD(totalEarned)}*\n\n` +
     `🔁 Profits compound automatically every 24h`
   );
