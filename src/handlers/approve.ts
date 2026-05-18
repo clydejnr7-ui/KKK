@@ -3,7 +3,7 @@ import { Redis } from "@upstash/redis";
 import { getPending, removePending } from "../pending";
 import { registerAccount, revokeAccount, getAllActiveUserIds } from "./balance";
 import { connectAndValidate } from "../utils/metaapi";
-import { formatUSD } from "../utils/balance";
+import { formatUSD, computeCurrentBalance } from "../utils/balance";
 
 function r(): Redis {
   return new Redis({
@@ -395,14 +395,19 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
           : "—";
 
-        const hasOverride = raw.adjustedBalance != null;
-        const currentBalance = hasOverride && raw.adjustedDate
-          ? (() => {
-              const adjDate = new Date(raw.adjustedDate);
-              const daysSince = Math.max(0, Math.floor((Date.now() - adjDate.getTime()) / 86_400_000));
-              return raw.adjustedBalance * Math.pow(1.03, daysSince);
-            })()
-          : (startDate ? raw.deposit * Math.pow(1.03, typeof daysActive === "number" ? daysActive : 0) : raw.deposit);
+        // Use computeCurrentBalance to correctly honour adjustedBalance + adjustedDate
+        const accountData = {
+          deposit: raw.deposit ?? 0,
+          startDate: startDate ?? new Date(),
+          adjustedBalance: raw.adjustedBalance ?? undefined,
+          adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate) : undefined,
+          fullName: raw.fullName ?? "",
+        };
+        const currentBalance = computeCurrentBalance(accountData);
+
+        // Profit base mirrors what the user sees
+        const profitBase = raw.adjustedBalance != null ? raw.adjustedBalance : (raw.deposit ?? 0);
+        const profit = currentBalance - profitBase;
 
         await ctx.api.sendMessage(
           chatId,
@@ -411,8 +416,9 @@ export function registerApproveHandler(bot: Bot<Context>): void {
           `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
           `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
           `📥 Original Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
-          (hasOverride ? `📌 Updated Balance: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
+          (raw.adjustedBalance != null ? `📌 Updated Balance: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
           `💰 Current Balance: <b>${formatUSD(currentBalance)}</b>\n` +
+          `📈 Profit (since update): <b>+${formatUSD(profit)}</b>\n` +
           `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
           {
             parse_mode: "HTML",
@@ -462,6 +468,15 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       ? Math.floor((Date.now() - startDate.getTime()) / 86_400_000)
       : "—";
 
+    const accountData = {
+      deposit: raw.deposit ?? 0,
+      startDate: startDate ?? new Date(),
+      adjustedBalance: raw.adjustedBalance ?? undefined,
+      adjustedDate: raw.adjustedDate ? new Date(raw.adjustedDate) : undefined,
+      fullName: raw.fullName ?? "",
+    };
+    const currentBalance = computeCurrentBalance(accountData);
+
     await ctx.api.sendMessage(
       ctx.chat!.id,
       `✅ <b>Approved Account</b>\n\n` +
@@ -470,6 +485,8 @@ export function registerApproveHandler(bot: Bot<Context>): void {
       `🖥 ${raw.platform ?? "—"} — ${raw.broker ?? raw.brokerName ?? "—"}\n` +
       `🏦 Server: <code>${raw.serverName ?? "—"}</code>\n` +
       `📥 Deposit: <b>${formatUSD(raw.deposit ?? 0)}</b>\n` +
+      (raw.adjustedBalance != null ? `📌 Updated: <b>${formatUSD(raw.adjustedBalance)}</b>\n` : ``) +
+      `💰 Current: <b>${formatUSD(currentBalance)}</b>\n` +
       `📅 Active for: <b>${daysActive} day${daysActive === 1 ? "" : "s"}</b>`,
       {
         parse_mode: "HTML",
@@ -669,12 +686,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   });
 
   // ── 💰 /updateaccount <userId> <balance> <YYYY-MM-DD> ────────────────────
-  // Silently sets adjustedBalance + adjustedDate. Original deposit NEVER changes.
-  // Days before adjustedDate: daily log uses original deposit compound.
-  // Days from adjustedDate onward: compounds from adjustedBalance.
-  // No message sent to user.
-  //
-  // Usage: /updateaccount 123456789 5000 2026-05-01
   bot.command("updateaccount", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -731,12 +742,6 @@ export function registerApproveHandler(bot: Bot<Context>): void {
   });
 
   // ── 💰 /setbalance <userId> <targetBalance> ───────────────────────────────
-  // Silently sets today's displayed balance to an exact amount.
-  // Stores adjustedBalance = targetBalance, adjustedDate = today.
-  // Original deposit and historical daily log stay unchanged.
-  // No message sent to user.
-  //
-  // Usage: /setbalance 123456789 8500
   bot.command("setbalance", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
