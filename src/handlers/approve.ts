@@ -522,7 +522,7 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     );
   });
 
-  // ── 🔑 /revokeaccount <userId> ── FIXED for channel_post context ──────────
+  // ── 🔑 /revokeaccount <userId> ────────────────────────────────────────────
   bot.command("revokeaccount", async (ctx) => {
     if (!isAdminChannel(ctx)) return;
 
@@ -623,6 +623,125 @@ export function registerApproveHandler(bot: Bot<Context>): void {
     }
     if (current) chunks.push(current);
     for (const chunk of chunks) await ctx.api.sendMessage(ctx.chat!.id, chunk, { parse_mode: "HTML" });
+  });
+
+  // ── 💰 /updateaccount <userId> <deposit> <YYYY-MM-DD> ────────────────────
+  // Silent update — no message sent to user.
+  // Updates deposit + start date in Redis. All figures recalculate
+  // automatically next time the user opens /balance or Daily Log.
+  //
+  // Usage:  /updateaccount 123456789 5000 2026-05-01
+  bot.command("updateaccount", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const parts = getCmdText(ctx).split(/\s+/);
+    const targetId = parseInt(parts[1] ?? "", 10);
+    const newDeposit = parseFloat(parts[2] ?? "");
+    const startDateStr = parts[3] ?? "";
+
+    if (isNaN(targetId) || isNaN(newDeposit) || newDeposit <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ <b>Usage:</b> <code>/updateaccount &lt;userId&gt; &lt;deposit&gt; &lt;YYYY-MM-DD&gt;</code>\n\n` +
+        `<b>Example:</b> <code>/updateaccount 123456789 5000 2026-05-01</code>\n\n` +
+        `Sets deposit to $5,000 from 2026-05-01. No message sent to user.\n` +
+        `They see updated figures next time they open /balance.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const raw = await r().get<any>(`acct:${targetId}`);
+    if (!raw) {
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ No active account found for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const startDate = new Date(`${startDateStr}T00:00:00.000Z`);
+    const daysElapsed = Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 86_400_000));
+    const currentBalance = newDeposit * Math.pow(1.03, daysElapsed);
+    const dailyEarning = currentBalance * 0.03;
+
+    await r().set(`acct:${targetId}`, {
+      ...raw,
+      deposit: parseFloat(newDeposit.toFixed(2)),
+      startDate: startDate.toISOString(),
+    });
+
+    await ctx.api.sendMessage(ctx.chat!.id,
+      `✅ <b>Account Updated (Silent)</b>\n\n` +
+      `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+      `🆔 <code>${targetId}</code>\n\n` +
+      `📥 Deposit:       <b>${formatUSD(newDeposit)}</b>\n` +
+      `📅 Start Date:    <b>${startDateStr}</b>\n` +
+      `📊 Day:           <b>${daysElapsed}</b>\n` +
+      `💰 Balance Now:   <b>${formatUSD(currentBalance)}</b>\n` +
+      `📈 Daily Earning: <b>+${formatUSD(dailyEarning)}</b>\n\n` +
+      `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
+      { parse_mode: "HTML" }
+    );
+  });
+
+  // ── 💰 /setbalance <userId> <targetBalance> ───────────────────────────────
+  // Silent update — no message sent to user.
+  // Sets exactly what balance the user sees today by back-calculating
+  // the deposit. Start date stays the same.
+  //
+  // Usage:  /setbalance 123456789 8500
+  bot.command("setbalance", async (ctx) => {
+    if (!isAdminChannel(ctx)) return;
+
+    const parts = getCmdText(ctx).split(/\s+/);
+    const targetId = parseInt(parts[1] ?? "", 10);
+    const targetBalance = parseFloat(parts[2] ?? "");
+
+    if (isNaN(targetId) || isNaN(targetBalance) || targetBalance <= 0) {
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ <b>Usage:</b> <code>/setbalance &lt;userId&gt; &lt;targetBalance&gt;</code>\n\n` +
+        `<b>Example:</b> <code>/setbalance 123456789 8500</code>\n\n` +
+        `Makes the user's balance show exactly $8,500 today.\n` +
+        `Start date stays the same — deposit is back-calculated. No message sent to user.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const raw = await r().get<any>(`acct:${targetId}`);
+    if (!raw) {
+      await ctx.api.sendMessage(ctx.chat!.id,
+        `⚠️ No active account found for user <code>${targetId}</code>.\n\nUse /listaccounts to check.`,
+        { parse_mode: "HTML" }
+      );
+      return;
+    }
+
+    const startDate = new Date(raw.startDate as string);
+    const daysElapsed = Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 86_400_000));
+
+    // balance = deposit × 1.03^days  →  deposit = balance / 1.03^days
+    const newDeposit = daysElapsed > 0
+      ? targetBalance / Math.pow(1.03, daysElapsed)
+      : targetBalance;
+    const dailyEarning = targetBalance * 0.03;
+
+    await r().set(`acct:${targetId}`, {
+      ...raw,
+      deposit: parseFloat(newDeposit.toFixed(2)),
+    });
+
+    await ctx.api.sendMessage(ctx.chat!.id,
+      `✅ <b>Balance Set (Silent)</b>\n\n` +
+      `👤 <b>${raw.fullName ?? "Unknown"}</b>\n` +
+      `🆔 <code>${targetId}</code>\n\n` +
+      `💰 Balance Now:       <b>${formatUSD(targetBalance)}</b>\n` +
+      `📈 Daily Earning:     <b>+${formatUSD(dailyEarning)}</b>\n` +
+      `📅 Day:               <b>${daysElapsed}</b>\n` +
+      `📥 Effective Deposit: <b>${formatUSD(newDeposit)}</b>\n\n` +
+      `<i>No message sent to user. New figures appear next time they open /balance or 📅 Daily Log.</i>`,
+      { parse_mode: "HTML" }
+    );
   });
 
   // ── Noop ──────────────────────────────────────────────────────────────────
