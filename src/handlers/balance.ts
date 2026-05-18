@@ -9,6 +9,7 @@ import {
   buildAccountTab,
 } from "../utils/balance";
 import { isPending } from "../pending";
+import { getFeeBalance } from "./deposit";
 
 function r(): Redis {
   return new Redis({
@@ -116,6 +117,7 @@ function accountKeyboard(isDemo: boolean): InlineKeyboard {
   }
   kb.text("💰 Deposit", "menu_deposit")
     .text("💳 Pay Fee ($3)", "menu_fee").row();
+  kb.text("💰 Top Up Fee Wallet", "menu_fee_topup").row();
   kb.text("🔄 Refresh", "dash_refresh").text("🏠 Main Menu", "menu_main");
   return kb;
 }
@@ -197,10 +199,12 @@ async function sendDashboard(
       text = buildDailyLogTab(data);
       keyboard = dailyKeyboard();
       break;
-    case "account":
-      text = buildAccountTab(data, isDemo);
+    case "account": {
+      const feeBal = await getFeeBalance(ctx.from!.id);
+      text = buildAccountTab(data, isDemo, feeBal);
       keyboard = accountKeyboard(isDemo);
       break;
+    }
     default:
       text = buildOverviewTab(data, live);
       keyboard = overviewKeyboard();
