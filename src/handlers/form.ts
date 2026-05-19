@@ -4,6 +4,7 @@ import { buildAdminMessage, buildConfirmationMessage, buildFormPreview } from ".
 import { savePending } from "../pending";
 import { handleDepositTextInput } from "./deposit";
 import { handleSupportTextInput, handleUserReplyToSupport, setSupportStep, clearSupportStep } from "./support";
+import { handlePropFirmTextInput } from "./propfirm";
 import { Redis } from "@upstash/redis";
 import { AccountData, computeCurrentBalance, formatUSD } from "../utils/balance";
 import { isPending } from "../pending";
@@ -26,16 +27,6 @@ async function getAccountData(userId: number): Promise<AccountData | null> {
   };
 }
 
-/** Effective start date — adjustedDate if set, else startDate */
-function effectiveStart(account: AccountData): Date {
-  if (account.adjustedBalance != null && account.adjustedDate) {
-    return account.adjustedDate instanceof Date
-      ? account.adjustedDate
-      : new Date(account.adjustedDate as unknown as string);
-  }
-  return account.startDate;
-}
-
 const LOGO = `
 ┌─────────────────────────┐
 │    📊  TRADING FLUX      │
@@ -55,6 +46,7 @@ function mainMenuKeyboard(): InlineKeyboard {
     .text("📝 Register Account", "menu_register").row()
     .text("💰 Deposit", "menu_deposit")
     .text("💳 Pay Fee ($3)", "menu_fee").row()
+    .text("🏆 Pass Prop Firm Challenge", "menu_propfirm").row()
     .text("❓ How It Works", "menu_howitworks")
     .text("💬 Support", "menu_support").row()
     .text("📋 My Status", "menu_status")
@@ -162,13 +154,13 @@ export function registerFormHandlers(bot: Bot<Context>): void {
       `*Step 1 — Submit Your Account*\nProvide your MT4/MT5 login credentials securely through our guided form.\n\n` +
       `*Step 2 — Expert Review (24h)*\nOur team verifies your account details and sets up management.\n\n` +
       `*Step 3 — Activation*\nWe activate trading on your account with our proven strategy.\n\n` +
-      `*Step 4 — Daily Growth*\nYour balance grows at +3% per day using compound interest.\n\n` +
-      `*Step 5 — Daily Updates*\nYou'll receive regular updates on your account performance.\n\n` +
-      `${"─".repeat(28)}\n💰 *Example: $1,000 deposit*\n  Day 7:   \\$1,229.87\n  Day 30:  \\$2,427.26\n  Day 90:  \\$14,300.74`,
+      `*Step 4 — Daily Growth*\nWatch your balance grow at +3% per day, compounding daily.\n\n` +
+      `${"─".repeat(28)}\n💡 Your funds stay in your own broker account at all times.`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
           .text("📝 Register Now", "menu_register").row()
+          .text("🏆 Pass Prop Firm", "menu_propfirm").row()
           .text("🏠 Main Menu", "menu_main"),
       }
     );
@@ -178,20 +170,15 @@ export function registerFormHandlers(bot: Bot<Context>): void {
     await ctx.answerCallbackQuery();
     await setSupportStep(ctx.from!.id);
     await ctx.reply(
-      `*💬 Contact Support*\n${"─".repeat(28)}\n\n` +
-      `Our support team is available 24/7 and will reply to you directly here in this chat.\n\n` +
-      `📝 *Describe your issue or question:*\n\n_Type your message below and tap Send._`,
+      `*💬 Support Centre*\n${"─".repeat(28)}\n\n` +
+      `Our team typically replies within a few hours.\n\n` +
+      `*Type your message below* and we'll get back to you as soon as possible.\n\n` +
+      `_You can send multiple messages. Just keep typing._`,
       {
         parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("❌ Cancel", "support_cancel"),
+        reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu_main"),
       }
     );
-  });
-
-  bot.callbackQuery("support_cancel", async (ctx) => {
-    await ctx.answerCallbackQuery("Cancelled");
-    await clearSupportStep(ctx.from!.id);
-    await ctx.reply(`✅ *Cancelled.*`, { parse_mode: "Markdown", reply_markup: mainMenuKeyboard() });
   });
 
   bot.callbackQuery("menu_status", async (ctx) => {
@@ -201,37 +188,20 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
     if (account) {
       const now = new Date();
-      const msPerDay = 86_400_000;
-
-      const start = effectiveStart(account);
-      const daysElapsed = Math.max(0, Math.floor((now.getTime() - start.getTime()) / msPerDay));
-
       const currentBalance = computeCurrentBalance(account, now);
       const totalProfit = currentBalance - account.deposit;
-      const growthPct = account.deposit > 0 ? (totalProfit / account.deposit) * 100 : 0;
-
-      const activeLabel = account.adjustedBalance != null
-        ? `Day *${daysElapsed}* since last update  ·  +3%/day`
-        : `Active for *${daysElapsed} day${daysElapsed !== 1 ? "s" : ""}*  ·  +3%/day`;
-
       await ctx.reply(
         `*📋 Your Account Status*\n${"─".repeat(28)}\n\n` +
-        `👤 *${account.fullName}*\n📌 Status: *🟢 Active*\n\n${"━".repeat(28)}\n` +
-        `💵 *BALANCE SUMMARY*\n\n` +
-        `  💰 Current Balance:  *${formatUSD(currentBalance)}*\n` +
-        `  📥 Original Deposit: *${formatUSD(account.deposit)}*\n` +
-        (account.adjustedBalance != null
-          ? `  📌 Updated Base:     *${formatUSD(account.adjustedBalance)}*\n`
-          : ``) +
-        `  📈 Total Profit:     *+${formatUSD(totalProfit)}*\n` +
-        `  🚀 Growth:           *+${growthPct.toFixed(2)}%*\n\n` +
-        `${"━".repeat(28)}\n🖥️ *${account.platform ?? "—"}*\n📅 ${activeLabel}`,
+        `📌 Status: *✅ Active*\n` +
+        `👤 Name: *${account.fullName}*\n` +
+        `🖥 Platform: *${account.platform ?? "—"}*\n` +
+        `💵 Deposit: *${formatUSD(account.deposit)}*\n` +
+        `💰 Balance: *${formatUSD(currentBalance)}*\n` +
+        `📈 Profit: *${formatUSD(totalProfit)}*`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
             .text("📊 Full Dashboard", "menu_balance").row()
-            .text("📅 Daily Log", "dash_daily").row()
-            .text("💰 Deposit More", "menu_deposit")
             .text("🏠 Main Menu", "menu_main"),
         }
       );
@@ -341,6 +311,9 @@ export function registerFormHandlers(bot: Bot<Context>): void {
 
     const handledByDeposit = await handleDepositTextInput(ctx);
     if (handledByDeposit) return;
+
+    const handledByPropFirm = await handlePropFirmTextInput(ctx);
+    if (handledByPropFirm) return;
 
     const session = await getSession(userId);
 
